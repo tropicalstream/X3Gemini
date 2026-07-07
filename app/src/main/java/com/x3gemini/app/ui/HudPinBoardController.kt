@@ -295,17 +295,24 @@ class HudPinBoardController(
         label.maxWidth = dp(150)
         label.ellipsize = android.text.TextUtils.TruncateAt.END
         header.addView(label)
-        // Refresh age sits right beside the title — "WORLD CUP · 5m" — with a
-        // dim middot separator, instead of being pushed to the far edge.
-        val ageLabel = if (pin.stale) "stale" else ageText(pin.updatedAt)
-        if (ageLabel.isNotBlank()) {
+        // Beside the title — "WORLD CUP · 5m", or a status reason when the
+        // card isn't updating: red for a dead/stale source, amber for an
+        // informational state like "rate-limited" (throttled, not broken).
+        val trailing = pin.statusNote ?: if (pin.stale) "stale" else ageText(pin.updatedAt)
+        if (trailing.isNotBlank()) {
             val age = TextView(activity)
             age.layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginStart = dp(5); leftMargin = dp(5) }
-            age.text = "·  $ageLabel"
-            age.setTextColor(if (pin.stale) 0xFFFF5252.toInt() else 0x80FFFFFF.toInt())
+            age.text = "·  $trailing"
+            age.setTextColor(
+                when {
+                    pin.stale -> 0xFFFF5252.toInt()           // red — dead source
+                    pin.statusNote != null -> 0xFFFFB347.toInt() // amber — throttled/info
+                    else -> 0x80FFFFFF.toInt()                // dim — normal age
+                }
+            )
             age.textSize = 8f
             header.addView(age)
         }

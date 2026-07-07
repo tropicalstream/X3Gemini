@@ -60,8 +60,13 @@ object LiveCardEngine {
     private const val MIN_INTERVAL_SEC = 60
 
     /** Consecutive failed refreshes before a card is shown as stale.
-     *  Tolerates transient rate-limit / grounding / UNAVAILABLE blips. */
+     *  Tolerates transient grounding / UNAVAILABLE blips. */
     private const val STALE_AFTER_FAILURES = 3
+
+    /** Rate-limit (429) cooldown: escalates 1 min → capped at 15 min so a
+     *  throttled card stops burning the exhausted quota. */
+    private const val RATE_LIMIT_BASE_COOLDOWN_MS = 60_000L
+    private const val RATE_LIMIT_MAX_COOLDOWN_MS = 15L * 60_000L
     /** Page fetch limits. */
     private const val FETCH_TIMEOUT_MS = 8_000
     private const val FETCH_MAX_BYTES = 96 * 1024
@@ -84,6 +89,14 @@ object LiveCardEngine {
     private val forced = Collections.synchronizedSet(mutableSetOf<String>())
     private val lastAttemptMs = Collections.synchronizedMap(mutableMapOf<String, Long>())
     private val failStreak = Collections.synchronizedMap(mutableMapOf<String, Int>())
+    // Rate-limit (HTTP 429) backoff, kept separate from failStreak: a 429
+    // is a quota/throttle condition, NOT a dead source, so it never marks
+    // the card stale-red — it shows "rate-limited" and backs off.
+    private val rateLimitStreak = Collections.synchronizedMap(mutableMapOf<String, Int>())
+    private val rateLimitedUntilMs = Collections.synchronizedMap(mutableMapOf<String, Long>())
+
+    /** Thrown by [callGemini] on a non-2xx response, carrying the code. */
+    private class GeminiHttpException(val code: Int) : RuntimeException("Gemini API $code")
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -134,10 +147,16 @@ object LiveCardEngine {
         val ids = livePins.map { it.id }.toSet()
         lastAttemptMs.keys.retainAll(ids)
         failStreak.keys.retainAll(ids)
+        rateLimitStreak.keys.retainAll(ids)
+        rateLimitedUntilMs.keys.retainAll(ids)
     }
 
     private fun isDue(pin: HudPin, now: Long): Boolean {
         if (forced.contains(pin.id)) return true
+        // Honour a rate-limit cooldown: retrying while throttled just burns
+        // more of the (already exhausted) quota and delays recovery.
+        val cooldownUntil = rateLimitedUntilMs[pin.id] ?: 0L
+        if (now < cooldownUntil) return false
         val streak = failStreak[pin.id] ?: 0
         val anchor = maxOf(pin.updatedAt, lastAttemptMs[pin.id] ?: 0L)
         // A card that has never loaded retries at the fast tick cadence
@@ -173,31 +192,58 @@ object LiveCardEngine {
             )
             val text = callGemini(apiKey, pin, pageText)
             if (text.equals("UNAVAILABLE", ignoreCase = true)) {
-                noteFailure(pin, "model returned UNAVAILABLE")
+                noteFailure(pin, "model returned UNAVAILABLE", userNote = "no data")
             } else {
                 failStreak.remove(pin.id)
+                rateLimitStreak.remove(pin.id)
+                rateLimitedUntilMs.remove(pin.id)
                 HudPinStore.updateContent(pin.id, clampCardText(text))
                 Log.d(TAG, "'${pin.label}' refreshed ok (${text.length} chars)")
             }
         } catch (t: Throwable) {
-            noteFailure(pin, t.message ?: "refresh failed")
+            if ((t as? GeminiHttpException)?.code == 429) {
+                noteRateLimited(pin)
+            } else {
+                val code = (t as? GeminiHttpException)?.code ?: -1
+                noteFailure(pin, t.message ?: "refresh failed", userNote = userNoteForError(code))
+            }
         }
     }
 
     /**
-     * A single failed refresh does NOT immediately stale the card.
-     * Transient misses are common (rate limits, a momentary grounding
-     * blip, a one-off UNAVAILABLE), so keep showing the last good content
-     * and only flip to the dimmed red 'stale' state after
-     * [STALE_AFTER_FAILURES] consecutive misses. The retry stays at the
-     * normal cadence until then (see [isDue]), so most cards recover on
-     * the next tick and never visibly go stale at all.
+     * HTTP 429 = the Gemini free-tier request quota is exhausted. This is
+     * not a dead source, so we DON'T mark the card stale-red — we surface
+     * "rate-limited" on the card (so the user knows why it isn't updating),
+     * keep the last value, and back off with an escalating cooldown
+     * (1 min → capped at 15 min) so we stop burning quota. Recovers on the
+     * next successful refresh once quota frees up.
      */
-    private fun noteFailure(pin: HudPin, reason: String) {
+    private fun noteRateLimited(pin: HudPin) {
+        val streak = (rateLimitStreak[pin.id] ?: 0) + 1
+        rateLimitStreak[pin.id] = streak
+        val cooldown = (RATE_LIMIT_BASE_COOLDOWN_MS shl minOf(streak - 1, 4))
+            .coerceAtMost(RATE_LIMIT_MAX_COOLDOWN_MS)
+        rateLimitedUntilMs[pin.id] = System.currentTimeMillis() + cooldown
+        HudPinStore.setStatus(pin.id, "rate-limited")
+        Log.w(
+            TAG,
+            "'${pin.label}' rate-limited (429) — backing off ${cooldown / 1000}s (streak $streak)"
+        )
+    }
+
+    /**
+     * A single failed refresh does NOT immediately stale the card.
+     * Transient misses are common (a momentary grounding blip, a one-off
+     * UNAVAILABLE), so keep showing the last good content and only flip to
+     * the dimmed red 'stale' state (with [userNote] as the reason) after
+     * [STALE_AFTER_FAILURES] consecutive misses. The retry stays at the
+     * normal cadence until then (see [isDue]).
+     */
+    private fun noteFailure(pin: HudPin, reason: String, userNote: String) {
         val streak = (failStreak[pin.id] ?: 0) + 1
         failStreak[pin.id] = streak
         if (streak >= STALE_AFTER_FAILURES) {
-            HudPinStore.markStale(pin.id)
+            HudPinStore.markStale(pin.id, userNote)
             Log.w(TAG, "'${pin.label}' stale after $streak consecutive misses ($reason)")
         } else {
             Log.d(
@@ -206,6 +252,13 @@ object LiveCardEngine {
                     "($reason) — keeping last content"
             )
         }
+    }
+
+    private fun userNoteForError(code: Int): String = when {
+        code in 500..599 -> "server error"
+        code == 403 -> "auth error"
+        code > 0 -> "error $code"
+        else -> "no connection"
     }
 
     // ── Step 1: raw source fetch ──────────────────────────────────────
@@ -309,7 +362,7 @@ object LiveCardEngine {
             Log.d(TAG, "'${pin.label}' HTTP ${resp.code} body=${bodyText.take(400)}")
             if (!resp.isSuccessful) {
                 Log.w(TAG, "Gemini ${resp.code}: ${bodyText.take(400)}")
-                throw RuntimeException("Gemini API ${resp.code}")
+                throw GeminiHttpException(resp.code)
             }
             return parseAnswer(bodyText)
         }

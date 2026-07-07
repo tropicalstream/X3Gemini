@@ -82,7 +82,14 @@ object HudPinStore {
         /** Refresh cadence in seconds; 0 = not a live pin. */
         val intervalSec: Int = 0,
         /** True when the last refresh attempt failed — UI dims the card. */
-        val stale: Boolean = false
+        val stale: Boolean = false,
+        /**
+         * Short human-readable status shown on the card when a refresh
+         * isn't succeeding — e.g. "rate-limited", "no data", "error 500".
+         * Runtime-only (deliberately NOT persisted, so a transient error
+         * never survives a restart); cleared on the next success.
+         */
+        val statusNote: String? = null
     ) {
         fun toJson(): JSONObject = JSONObject()
             .put("id", id)
@@ -242,7 +249,8 @@ object HudPinStore {
         notifyListeners()
     }
 
-    /** Engine writes a live card's fresh display text (success path). */
+    /** Engine writes a live card's fresh display text (success path).
+     *  Clears any stale flag and status note. */
     fun updateContent(id: String, content: String) {
         synchronized(lock) {
             val current = all()
@@ -252,21 +260,42 @@ object HudPinStore {
             next[idx] = next[idx].copy(
                 content = content,
                 updatedAt = System.currentTimeMillis(),
-                stale = false
+                stale = false,
+                statusNote = null
             )
             persist(next)
         }
         notifyListeners()
     }
 
-    /** Engine flags a live card whose refresh attempt failed. */
-    fun markStale(id: String) {
+    /** Engine flags a live card whose refresh keeps failing (dead source).
+     *  [note] is a short user-facing reason shown on the card. */
+    fun markStale(id: String, note: String? = null) {
         synchronized(lock) {
             val current = all()
             val idx = current.indexOfFirst { it.id == id }
-            if (idx < 0 || current[idx].stale) return
+            if (idx < 0) return
+            val cur = current[idx]
+            if (cur.stale && cur.statusNote == note) return
             val next = current.toMutableList()
-            next[idx] = next[idx].copy(stale = true)
+            next[idx] = cur.copy(stale = true, statusNote = note)
+            persist(next)
+        }
+        notifyListeners()
+    }
+
+    /**
+     * Set a card's status note WITHOUT marking it stale — for conditions
+     * that aren't a dead source, e.g. "rate-limited" (throttled but the
+     * last value is still valid). Pass null to clear.
+     */
+    fun setStatus(id: String, note: String?) {
+        synchronized(lock) {
+            val current = all()
+            val idx = current.indexOfFirst { it.id == id }
+            if (idx < 0 || current[idx].statusNote == note) return
+            val next = current.toMutableList()
+            next[idx] = next[idx].copy(statusNote = note)
             persist(next)
         }
         notifyListeners()

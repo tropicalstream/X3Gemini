@@ -60,8 +60,36 @@ news, prices, weather). Asking to pin a static thing (a link, a video, a
 station) is declined — there's no browser on this build. Default refresh is
 every 5 minutes; add *"refresh every N minutes"* to change it (1–180). Tap a
 live card to refresh it now; move/delete it with the double-tap modify mode
-like any pin. A **red outline with a `!`** means the last refresh failed or
-returned nothing (the card keeps showing its previous value, dimmed).
+like any pin.
+
+Each card carries a small status beside its title so you know why it isn't
+current:
+
+| Beside the title | Meaning |
+|---|---|
+| `· 5m` (dim) | Last successful refresh, minutes ago — all good. |
+| `· rate-limited` (amber) | The Gemini free-tier request quota is used up. The card keeps its last value and auto-retries with a growing backoff (1 → 15 min). **Not broken** — see below. |
+| `· <reason>` + red outline | The source keeps failing (`no data`, `server error`, `error 4xx`…) after several tries; last value shown dimmed. |
+
+### Free-tier rate limits (the `rate-limited` state)
+
+X3Gemini uses the Gemini Developer API. A **free** API key has a low request
+cap (Google's free tier is ~20 requests/day for `generateContent`, and
+**search-grounded** cards — news, scores, anything without a fixed source URL
+— are the heaviest). Each live-widget refresh is one request, so a few
+widgets on short intervals (a news card especially) will exhaust the free
+quota and every refresh comes back **HTTP 429**. The card then shows
+`rate-limited` and stops hammering the API until quota frees up.
+
+To avoid it:
+- Run **fewer** live widgets, and prefer **longer** refresh intervals
+  (e.g. 15–30 min for news).
+- Give heavy/grounded cards (news, scores) the longest intervals.
+- Best fix: use an API key with **billing enabled** (paid tier) — the
+  free-tier caps disappear. Push it the same way (see below).
+
+You can confirm the cause any time with `adb logcat -s LiveCardEngine`; a
+`429` line quotes Google's quota message verbatim.
 
 ## API key via adb (no login screen, no companion app)
 
