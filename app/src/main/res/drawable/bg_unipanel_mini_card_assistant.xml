@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Phase 2 Step 2c.2: assistant-side mini chat card background.
+
+  Mirrors app/src/main/res/drawable/bg_chat_bubble_assistant.xml but
+  with slightly tighter corners (10dp vs 14dp) since the mini cards
+  are narrower than the full chat panel rows. Background tint and
+  stroke colour match the assistant bubble so the overlay reads as
+  the same surface, just compacted for HUD use.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#D9222C3D" />
+    <corners android:radius="10dp" />
+    <stroke
+        android:width="1dp"
+        android:color="#BBA4C8FF" />
+</shape>

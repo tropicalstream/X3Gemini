@@ -1,0 +1,281 @@
+<com.x3gemini.app.ui.BinocularSbsLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- Single logical viewport – BinocularSbsLayout draws it twice (L+R). -->
+    <FrameLayout
+        android:id="@+id/mainContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000">
+
+        <!-- The HUD overlay. Container stays transparent + clickable=false;
+             individual widgets consume their own taps via the cursor-tap
+             pipeline (dispatchUnipanelOverlayTouchIfHit). Everything below
+             the HUD strip is pure black = transparent on the waveguide. -->
+        <FrameLayout
+            android:id="@+id/unipanelOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@android:color/transparent"
+            android:clickable="false"
+            android:focusable="false"
+            android:visibility="visible">
+
+            <!-- HUD strip: time · date · battery · network · G · avatar orb.
+                 Semi-transparent dark background, pinned top-start. -->
+            <LinearLayout
+                android:id="@+id/unipanelHudStrip"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_gravity="top|start"
+                android:layout_marginStart="2dp"
+                android:layout_marginTop="2dp"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:paddingStart="6dp"
+                android:paddingEnd="8dp"
+                android:background="#B3000000"
+                android:elevation="8dp"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:clickable="false"
+                android:focusable="false">
+
+                <TextView
+                    android:id="@+id/unipanelHudTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="--:--"
+                    android:textColor="#FFE0F4FF"
+                    android:textSize="13sp"
+                    android:letterSpacing="0.06"
+                    tools:ignore="UnusedAttribute" />
+
+                <!-- Date + day-of-week, "Mon · May 19". Same 30s tick as
+                     the clock. -->
+                <TextView
+                    android:id="@+id/unipanelHudDate"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:fontFamily="sans-serif"
+                    android:text="—"
+                    android:textColor="#FFB7CEDE"
+                    android:textSize="11sp"
+                    android:letterSpacing="0.04"
+                    tools:ignore="UnusedAttribute" />
+
+                <!-- Battery %. Sticky ACTION_BATTERY_CHANGED broadcast. -->
+                <TextView
+                    android:id="@+id/unipanelHudBattery"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:gravity="center_vertical"
+                    android:drawableStart="@drawable/ic_unipanel_battery"
+                    android:drawablePadding="4dp"
+                    android:drawableTint="#FF9FE6B0"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="—"
+                    android:textColor="#FF9FE6B0"
+                    android:textSize="11sp"
+                    android:letterSpacing="0.04"
+                    tools:ignore="UnusedAttribute" />
+
+                <!-- Network status: Wi-Fi / cellular / offline, driven by a
+                     default-network ConnectivityManager callback. -->
+                <TextView
+                    android:id="@+id/unipanelHudNetwork"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="⊘"
+                    android:textColor="#FFFF5252"
+                    android:textSize="11sp"
+                    android:letterSpacing="0.04"
+                    tools:ignore="UnusedAttribute" />
+
+                <!-- AI status badge "G" — green when the Gemini API is
+                     healthy/idle, amber while connecting, red on error. -->
+                <TextView
+                    android:id="@+id/unipanelHudAiBadge"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:layout_marginStart="10dp"
+                    android:gravity="center"
+                    android:fontFamily="sans-serif-medium"
+                    android:text="G"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/bg_unipanel_voice_pill"
+                    tools:ignore="UnusedAttribute" />
+
+                <!-- Avatar orb: tap toggles a Gemini Live session. Glow halo
+                     is red while the user speaks, green while Gemini speaks,
+                     dim steel ring when idle. -->
+                <FrameLayout
+                    android:id="@+id/unipanelVoiceOrb"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="12dp"
+                    android:layout_marginTop="4dp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:contentDescription="Toggle Gemini voice"
+                    tools:ignore="UnusedAttribute">
+
+                    <View
+                        android:id="@+id/unipanelVoiceOrbGlow"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:alpha="0.55"
+                        android:background="@drawable/bg_unipanel_orb_ring_idle"
+                        android:contentDescription="@null" />
+
+                    <ImageView
+                        android:id="@+id/unipanelVoiceOrbImage"
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:layout_gravity="center"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_unipanel_earth_orb"
+                        android:contentDescription="Voice activity orb" />
+
+                </FrameLayout>
+
+                <!-- Red camera glyph — visible only while CameraX streams. -->
+                <ImageView
+                    android:id="@+id/unipanelVisionDot"
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:layout_marginStart="10dp"
+                    android:src="@drawable/ic_unipanel_camera_red"
+                    android:contentDescription="Camera active"
+                    android:visibility="gone"
+                    tools:ignore="UnusedAttribute" />
+
+            </LinearLayout>
+
+            <!-- Transient one-line status notice ("Camera off", "Pin
+                 removed", errors). NOT the heartbeat ticker — no scroll,
+                 no persistent agent status; auto-clears after ~3.5s. -->
+            <TextView
+                android:id="@+id/unipanelHudNotice"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|start"
+                android:layout_marginStart="8dp"
+                android:layout_marginTop="42dp"
+                android:background="#B3000000"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="3dp"
+                android:elevation="12dp"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="1"
+                android:singleLine="true"
+                android:textColor="#FFE0F4FF"
+                android:textSize="11sp"
+                android:visibility="gone"
+                tools:ignore="UnusedAttribute" />
+
+            <!-- Camera preview: 4:3 (native X3 photo proportions), sized and
+                 centered at runtime to fill most of the under-HUD area
+                 (repositionCameraPreview). Visible only while CameraX
+                 streams. XML values are pre-layout fallbacks. -->
+            <FrameLayout
+                android:id="@+id/unipanelCameraPreviewFrame"
+                android:layout_width="320dp"
+                android:layout_height="240dp"
+                android:layout_gravity="top|start"
+                android:layout_marginStart="160dp"
+                android:layout_marginTop="46dp"
+                android:background="@drawable/bg_unipanel_camera_preview"
+                android:padding="4dp"
+                android:elevation="9dp"
+                android:visibility="gone"
+                android:clickable="false"
+                android:focusable="false">
+
+                <androidx.camera.view.PreviewView
+                    android:id="@+id/unipanelCameraPreviewView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+            </FrameLayout>
+
+            <!-- HUD pin board — notes / pictures / live cards rendered
+                 programmatically by HudPinBoardController into the area
+                 under the HUD strip. Transparent + clickable=false so
+                 empty-space taps pass through; individual pins are
+                 clickable=true and consume their own cursor taps. -->
+            <FrameLayout
+                android:id="@+id/unipanelPinBoard"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@android:color/transparent"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:clickable="false"
+                android:focusable="false" />
+
+            <!-- Gemini reply card. Same display + timeout behaviour as
+                 TapInsight: persists until a newer reply replaces it or a
+                 right-arm double-tap dismisses it; tap toggles the
+                 expanded reader. Runtime positioning in
+                 repositionAssistantCard(). -->
+            <ScrollView
+                android:id="@+id/unipanelMiniCardScroll"
+                android:layout_width="300dp"
+                android:layout_height="76dp"
+                android:layout_gravity="top|start"
+                android:layout_marginStart="160dp"
+                android:layout_marginTop="46dp"
+                android:background="@drawable/bg_unipanel_mini_card_assistant"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="8dp"
+                android:scrollbars="none"
+                android:fadeScrollbars="false"
+                android:elevation="10dp"
+                android:clickable="false"
+                android:focusable="false"
+                android:visibility="gone"
+                tools:ignore="UnusedAttribute">
+
+                <TextView
+                    android:id="@+id/unipanelMiniCard1"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:contentDescription="Gemini reply — tap to expand"
+                    android:fontFamily="sans-serif-medium"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="11sp"
+                    android:lineSpacingExtra="1dp"
+                    android:text="" />
+
+            </ScrollView>
+
+        </FrameLayout>
+
+        <!-- Trackpad cursor. Inside the logical child so dispatchDraw
+             duplicates it to both eyes; elevation outranks every overlay. -->
+        <ImageView
+            android:id="@+id/cursorView"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:src="@drawable/cursor_arrow_image"
+            android:elevation="1000dp"
+            android:visibility="gone"
+            android:contentDescription="@null" />
+
+    </FrameLayout>
+
+</com.x3gemini.app.ui.BinocularSbsLayout>

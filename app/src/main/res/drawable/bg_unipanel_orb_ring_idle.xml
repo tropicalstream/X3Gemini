@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  IDLE state ring (voice loop is OFF / standby). Phase 4k.10. A thin,
+  dim steel-blue outline so the avatar still reads as "present" but is
+  visibly DIFFERENT from the bold lit red/green active rings. No bloom
+  layer — idle should never compete with the active states for
+  attention.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:dither="true"
+    android:shape="oval">
+    <stroke
+        android:width="1.5dp"
+        android:color="#66B7CEDE" />
+    <solid android:color="#00000000" />
+</shape>

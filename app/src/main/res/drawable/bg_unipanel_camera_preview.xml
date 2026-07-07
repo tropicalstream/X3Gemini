@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Phase 4g — burgundy-stroked frame for the unipanel CameraX preview.
+  Mirrors the Hermes branch's bg_camera_frame_burgundy: deep burgundy
+  border, near-black fill, 6dp rounded corners. The 4dp padding on
+  the FrameLayout shows the burgundy stroke around the preview
+  rectangle, exactly like the chat-panel mock-up Mars referenced.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FF0A0708" />
+    <stroke android:width="2dp" android:color="#FF7A1F2E" />
+    <corners android:radius="6dp" />
+</shape>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  LISTENING state ring (user is speaking). Phase 4k.10 replaces the
+  washed-out soft radial halo with a BOLD, crisp ring so the state is
+  unmistakable on the small 40dp orb. Two layers:
+
+    1) Outer bloom — a wide radial that fades from a punchy red core to
+       transparent, so the ring reads as "lit" rather than flat.
+    2) Crisp stroke ring — a 3.5dp fully-opaque red oval stroke right at
+       the orb edge. This hard bright edge is what makes "listening"
+       legible at a glance.
+
+  Red was chosen for the USER-speaking channel (mirrors the hermes
+  oscilloscope's red user waveform).
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape
+            android:dither="true"
+            android:shape="oval">
+            <gradient
+                android:centerColor="#99FF2A2A"
+                android:centerX="0.5"
+                android:centerY="0.5"
+                android:endColor="#00FF2A2A"
+                android:gradientRadius="60%"
+                android:startColor="#CCFF5252"
+                android:type="radial" />
+        </shape>
+    </item>
+    <item>
+        <shape
+            android:dither="true"
+            android:shape="oval">
+            <stroke
+                android:width="3.5dp"
+                android:color="#FFFF2A2A" />
+            <solid android:color="#00000000" />
+        </shape>
+    </item>
+</layer-list>

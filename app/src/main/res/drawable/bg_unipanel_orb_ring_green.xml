@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TALKING state ring (Gemini is speaking). Phase 4k.10. Same bold
+  two-layer construction as the red listening ring but in a bright
+  emerald green, so the two activity states can never be confused:
+
+    RED ring  = the glasses are LISTENING to you.
+    GREEN ring = Gemini is TALKING back.
+
+  1) Outer bloom — wide radial fading from a punchy green core to clear.
+  2) Crisp stroke ring — 3.5dp fully-opaque green oval stroke at the
+     orb edge for an unmistakable lit outline.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape
+            android:dither="true"
+            android:shape="oval">
+            <gradient
+                android:centerColor="#992EE66B"
+                android:centerX="0.5"
+                android:centerY="0.5"
+                android:endColor="#002EE66B"
+                android:gradientRadius="60%"
+                android:startColor="#CC4DFF88"
+                android:type="radial" />
+        </shape>
+    </item>
+    <item>
+        <shape
+            android:dither="true"
+            android:shape="oval">
+            <stroke
+                android:width="3.5dp"
+                android:color="#FF2EE66B" />
+            <solid android:color="#00000000" />
+        </shape>
+    </item>
+</layer-list>
