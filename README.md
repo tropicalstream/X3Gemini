@@ -64,11 +64,21 @@ adb push gemini_api_key.txt /sdcard/Android/data/com.x3gemini.app/files/gemini_a
 ```
 
 > Either way the key is re-read within ~10 s (no restart needed).
-> Expected key format: a Gemini Developer API key from
-> [aistudio.google.com](https://aistudio.google.com) — it starts with `AIza`.
-> Keys starting with `AQ.` are Vertex AI express-mode keys and will NOT
-> authenticate against the `generativelanguage.googleapis.com` Live endpoint
-> this app uses.
+>
+> **Key type matters.** This app talks directly to the Gemini Developer API
+> Live endpoint (`generativelanguage.googleapis.com`), so it needs a **Gemini
+> API key from [aistudio.google.com](https://aistudio.google.com)** — the
+> classic ones look like `AIzaSy…`. If a session opens and immediately closes,
+> or the "G" badge goes red, the key is being rejected by that endpoint —
+> confirm and read the exact reason in logcat:
+>
+> ```bash
+> adb logcat -s GeminiLiveClient GeminiVoicePipe
+> ```
+>
+> A `403` / `API_KEY_INVALID` / auth close code there means wrong key *type*
+> for this endpoint (e.g. a Vertex-AI express key rather than an AI Studio
+> Gemini key), not a wrong app.
 
 ## Build + install (Mars runs these)
 
