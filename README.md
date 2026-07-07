@@ -34,7 +34,6 @@ avatar orb** (+ red camera glyph while the camera streams).
 | Right arm double tap, cursor **on a pin** | Pin modify mode: next tap moves it, ✕ deletes |
 | **Left arm single tap** | **Toggle camera** (4:3 preview under the HUD, frames stream to Gemini). Opening it also auto-starts a Gemini session. |
 | Tap avatar orb | Also toggles Gemini |
-| Tap chat card | Expand / collapse the reply reader |
 | Tap a picture pin | Fullscreen viewer (tap again to dismiss) |
 | Tap a live card | Refresh it now |
 

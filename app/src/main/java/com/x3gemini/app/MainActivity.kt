@@ -126,10 +126,18 @@ class MainActivity : AppCompatActivity() {
     // ── Chat card state (same display + timeout behaviour as TapInsight:
     //    persists until replaced or dismissed; tap = expand/collapse) ──
     @Volatile private var assistantCardDismissedThroughMs: Long = 0L
-    private var isCardExpanded = false
-    private var lastRenderedCardText: String = ""
 
     private var noticeClearRunnable: Runnable? = null
+
+    // Tracks the last voice phase so we can detect a session END and hide
+    // the chat card a short while after (rather than persisting it).
+    private var lastVoicePhase: HudStateBridge.VoicePhase = HudStateBridge.VoicePhase.IDLE
+    private val hideChatCardRunnable = Runnable {
+        // Suppress any re-show of these cards, then clear the box.
+        assistantCardDismissedThroughMs = System.currentTimeMillis()
+        findViewById<View?>(R.id.unipanelMiniCardScroll)?.visibility = View.GONE
+        findViewById<TextView?>(R.id.unipanelMiniCard1)?.text = ""
+    }
 
     /**
      * Force 1dp == 1px for the 640×480 logical viewport. Set density
@@ -333,8 +341,28 @@ class MainActivity : AppCompatActivity() {
                 renderAiBadge(state)
                 renderVoiceOrb(state)
                 renderNotice(state)
+                handleVoicePhaseChange(state.phase)
             }
         }
+    }
+
+    /**
+     * When a session ENDS (phase → IDLE), keep the last chat card up for
+     * [CHAT_CARD_LINGER_MS], then hide it. When a session is active, cancel
+     * any pending hide so the card stays. Transition-driven so a final card
+     * committed at end can't cancel the scheduled hide.
+     */
+    private fun handleVoicePhaseChange(phase: HudStateBridge.VoicePhase) {
+        val wasActive = lastVoicePhase != HudStateBridge.VoicePhase.IDLE
+        if (phase == HudStateBridge.VoicePhase.IDLE) {
+            if (wasActive) {
+                uiHandler.removeCallbacks(hideChatCardRunnable)
+                uiHandler.postDelayed(hideChatCardRunnable, CHAT_CARD_LINGER_MS)
+            }
+        } else {
+            uiHandler.removeCallbacks(hideChatCardRunnable)
+        }
+        lastVoicePhase = phase
     }
 
     private fun renderAiBadge(state: HudStateBridge.State) {
@@ -417,20 +445,10 @@ class MainActivity : AppCompatActivity() {
     private fun setupChatCard() {
         val card = findViewById<TextView?>(R.id.unipanelMiniCard1) ?: return
         val scroll = findViewById<View?>(R.id.unipanelMiniCardScroll) ?: return
-        // onClick goes on the TextView, not the ScrollView —
-        // ScrollView.onTouchEvent never calls performClick (gotcha #20).
-        // Tap toggles the expanded reader; collapsing keeps the card up.
-        card.setOnClickListener {
-            val text = card.text?.toString()?.trim().orEmpty()
-            if (text.isBlank()) return@setOnClickListener
-            isCardExpanded = !isCardExpanded
-            scroll.visibility = View.VISIBLE
-            repositionAssistantCard()
-            (scroll as? ScrollView)?.post {
-                if (isCardExpanded) scroll.scrollTo(0, 0)
-                else scroll.fullScroll(View.FOCUS_DOWN)
-            }
-        }
+        // The card is read-only — no tap-to-expand. It's an inert surface
+        // (the ScrollView background makes the overlay hit-test consume
+        // taps on it without doing anything).
+        card.isClickable = false
 
         chatCardSubscription?.runCatching { close() }
         chatCardSubscription = ChatCardBridge.observe { cards ->
@@ -456,21 +474,12 @@ class MainActivity : AppCompatActivity() {
         if (latestAssistant == null) {
             card.text = ""
             scroll.visibility = View.GONE
-            lastRenderedCardText = ""
-            isCardExpanded = false
             return
         }
-        // Only an explicit tap expands a card: a genuinely NEW reply
-        // resets to collapsed; a streaming continuation keeps the state.
-        val isContinuation = lastRenderedCardText.isNotEmpty() &&
-            latestAssistant.startsWith(lastRenderedCardText)
-        if (!isContinuation) {
-            isCardExpanded = false
-        }
-        lastRenderedCardText = latestAssistant
         card.text = latestAssistant
         scroll.visibility = View.VISIBLE
         repositionAssistantCard()
+        // Keep the newest text in view as the reply streams in.
         scroll.post {
             repositionAssistantCard()
             (scroll as? ScrollView)?.fullScroll(View.FOCUS_DOWN)
@@ -484,22 +493,10 @@ class MainActivity : AppCompatActivity() {
         val overlay = findViewById<ViewGroup?>(R.id.unipanelOverlay) ?: return
         if (overlay.width <= 0) return
 
-        val expanded = isCardExpanded
-        val width: Int
-        val height: Int
-        val left: Int
-        val top: Int
-        if (expanded) {
-            left = 8
-            top = HUD_CONTENT_TOP
-            width = overlay.width - 16
-            height = (overlay.height - top - 8).coerceAtLeast(120)
-        } else {
-            width = 300.coerceAtMost(overlay.width - 16)
-            height = 76
-            left = ((overlay.width - width) / 2).coerceAtLeast(8)
-            top = HUD_CONTENT_TOP + 4
-        }
+        val width = 300.coerceAtMost(overlay.width - 16)
+        val height = 76
+        val left = ((overlay.width - width) / 2).coerceAtLeast(8)
+        val top = HUD_CONTENT_TOP + 4
 
         val lp = cardView.layoutParams as? FrameLayout.LayoutParams ?: return
         var changed = false
@@ -619,15 +616,6 @@ class MainActivity : AppCompatActivity() {
      *  set as TapInsight's right-arm double-tap. */
     private fun exitGeminiFully() {
         val api = voiceServiceApi
-        val lastAssistantTimestamp = ChatCardBridge.current()
-            .asSequence()
-            .filter { !it.fromUser && it.text.isNotBlank() }
-            .map { it.timestampMs }
-            .maxOrNull()
-            ?: System.currentTimeMillis()
-        assistantCardDismissedThroughMs =
-            maxOf(assistantCardDismissedThroughMs, lastAssistantTimestamp)
-
         runCatching { if (api?.isCameraOn() == true) api.toggleCamera() }
         runCatching { api?.shutdownVoice() }
         HudStateBridge.update {
@@ -644,12 +632,10 @@ class MainActivity : AppCompatActivity() {
             findViewById<View?>(R.id.unipanelCameraPreviewFrame)?.visibility = View.GONE
             findViewById<View?>(R.id.unipanelVisionDot)?.visibility = View.GONE
         }
-        isCardExpanded = false
-        runCatching {
-            findViewById<View?>(R.id.unipanelMiniCardScroll)?.visibility = View.GONE
-            findViewById<TextView?>(R.id.unipanelMiniCard1)?.text = ""
-        }
-        Log.i(TAG, "Full Gemini exit (session + camera + chat card)")
+        // The chat card is NOT hidden here — the phase→IDLE published above
+        // starts the linger timer (handleVoicePhaseChange), so the last
+        // reply stays up for CHAT_CARD_LINGER_MS after the session ends.
+        Log.i(TAG, "Full Gemini exit (session + camera)")
     }
 
     private fun toggleCamera() {
@@ -1065,5 +1051,7 @@ class MainActivity : AppCompatActivity() {
         private const val RIGHT_ARM_TAP_DEDUPE_MS = 90L
         private const val CURSOR_IDLE_HIDE_MS = 6_000L
         private const val NOTICE_DISPLAY_MS = 3_500L
+        // How long the last chat card lingers after a session ends.
+        private const val CHAT_CARD_LINGER_MS = 10_000L
     }
 }
