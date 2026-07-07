@@ -122,7 +122,21 @@ class GeminiVoicePipeline(context: Context) {
             return
         }
 
-        Log.i(TAG, "activate(): starting voice session")
+        // Distinguish "no key" from "connection failed" up front, so the
+        // HUD gives the real reason instead of a generic connect error.
+        val resolvedKey = ApiKeyStore.resolve(appContext)
+        if (resolvedKey.isNullOrBlank()) {
+            Log.w(TAG, "activate(): no Gemini API key resolved")
+            HudStateBridge.update {
+                it.copy(
+                    phase = HudStateBridge.VoicePhase.IDLE,
+                    connection = HudStateBridge.ConnectionStatus.ERROR,
+                    notification = "No Gemini API key — push it via adb (see README)."
+                )
+            }
+            return
+        }
+        Log.i(TAG, "activate(): starting voice session (key len=${resolvedKey.length})")
         runCatching { chat.resetLiveAssistantStream() }
 
         HudStateBridge.update {

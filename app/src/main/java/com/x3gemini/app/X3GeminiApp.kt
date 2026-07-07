@@ -1,6 +1,13 @@
 package com.x3gemini.app
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.util.Log
+import androidx.core.content.ContextCompat
+import com.x3gemini.app.core.config.ApiKeyStore
 import com.x3gemini.app.core.bridge.HudPinStore
 import com.x3gemini.app.core.chat.ChatSessionModel
 import com.x3gemini.app.core.live.LiveCardEngine
@@ -15,6 +22,18 @@ class X3GeminiApp : Application() {
 
     val chatModel: ChatSessionModel by lazy { ChatSessionModel() }
 
+    private val apiKeyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != ACTION_SET_API_KEY) return
+            val key = intent.getStringExtra("key")?.trim().orEmpty()
+            if (key.isBlank()) {
+                Log.w(TAG, "SET_API_KEY broadcast without --es key")
+                return
+            }
+            ApiKeyStore.persistFromBroadcast(context, key)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         // Vendor SDK init — required before any Activity on the Mercury
@@ -23,5 +42,24 @@ class X3GeminiApp : Application() {
         HudPinStore.init(this)
         // Live cards keep refreshing process-wide, session or not.
         runCatching { LiveCardEngine.ensureStarted(this) }
+        // Runtime-registered key receiver. A manifest receiver does NOT get
+        // an IMPLICIT `am broadcast` on Android 8+ (background broadcast
+        // limits), so the plain command silently no-ops. A context-
+        // registered receiver in the live process DOES receive it — this is
+        // what makes `adb shell am broadcast -a …SET_API_KEY --es key …`
+        // work without needing an explicit -n component.
+        runCatching {
+            ContextCompat.registerReceiver(
+                this,
+                apiKeyReceiver,
+                IntentFilter(ACTION_SET_API_KEY),
+                ContextCompat.RECEIVER_EXPORTED
+            )
+        }
+    }
+
+    companion object {
+        private const val TAG = "X3GeminiApp"
+        private const val ACTION_SET_API_KEY = "com.x3gemini.app.SET_API_KEY"
     }
 }

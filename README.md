@@ -46,22 +46,33 @@ watching the Warriors score"*, *"take a photo"*, *"remove the … pin"*,
 
 Two ways — if both are set, the **file wins**:
 
-**1. Broadcast** (recommended — works even before first launch; persists to
-app prefs and survives restarts):
+**1. Broadcast** (persists to app prefs; survives restarts). The app must be
+**running** — a context-registered receiver picks it up (a manifest receiver
+would NOT, because Android 8+ blocks implicit broadcasts to manifest
+receivers, which is why the plain command silently no-ops when the app is
+cold):
 
 ```bash
-adb shell am start -n com.x3gemini.app/.MainActivity   # skip if already running
+adb shell am start -n com.x3gemini.app/.MainActivity
 adb shell am broadcast -a com.x3gemini.app.SET_API_KEY --es key "AIza...your-key..."
 ```
 
-**2. File push** (only after the app has been launched once — the target
-directory is created by the app, and Android 12 scoped storage forbids adb
-from creating it: you'll get `remote secure_mkdirs failed: Operation not
-permitted` on a fresh install):
+If the app happens to be cold, target the receiver explicitly instead (an
+explicit broadcast bypasses the implicit-broadcast limit):
 
 ```bash
-echo "AIza...your-key..." > gemini_api_key.txt
-adb push gemini_api_key.txt /sdcard/Android/data/com.x3gemini.app/files/gemini_api_key.txt
+adb shell am broadcast -n com.x3gemini.app/.core.config.ApiKeyBroadcastReceiver \
+  -a com.x3gemini.app.SET_API_KEY --es key "AIza...your-key..."
+```
+
+**2. File push** (works once the app has been launched at least once — the
+first launch creates the target dir; adb can't create it on a fresh install,
+you'd get `secure_mkdirs failed: Operation not permitted`):
+
+```bash
+echo "AIza...your-key..." > /Users/me/Projects/X3Gemini/gemini_api_key.txt
+adb push /Users/me/Projects/X3Gemini/gemini_api_key.txt \
+  /sdcard/Android/data/com.x3gemini.app/files/gemini_api_key.txt
 ```
 
 > Either way the key is re-read within ~10 s (no restart needed).
