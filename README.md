@@ -38,9 +38,31 @@ avatar orb** (+ red camera glyph while the camera streams).
 | Tap a picture pin | Fullscreen viewer (tap again to dismiss) |
 | Tap a live card | Refresh it now |
 
-Voice: *"make a note that…"*, *"pin that picture of…"*, *"add a live card
-watching the Warriors score"*, *"take a photo"*, *"remove the … pin"*,
-*"what's pinned?"*, *"clear my pins"*.
+### Voice commands
+
+- **Notes:** *"make a note that the router password is hunter2."*
+- **Pictures:** *"pin that picture of the whiteboard"* (captures the current
+  camera frame; the camera must be on).
+- **Photos:** *"take a photo"* / *"save this"* (writes to `DCIM/X3Gemini`).
+- **Manage pins:** *"remove the Warriors pin"*, *"what's pinned?"*, *"clear my
+  pins."*
+
+**Live-update widgets** (auto-refreshing HUD cards) — say what *changing*
+information to watch:
+
+- *"Add a live card watching the World Cup scores."*
+- *"Pin a live widget for the top AI headline, refresh every 2 minutes."*
+- *"Keep me posted on the weather in Oakland on my HUD."*
+- *"Track the price of Bitcoin on my HUD."*
+- *"Make a live HUD card for new trending Rust repos."*
+
+Live widgets are only for information that **changes over time** (scores,
+news, prices, weather). Asking to pin a static thing (a link, a video, a
+station) is declined — there's no browser on this build. Default refresh is
+every 5 minutes; add *"refresh every N minutes"* to change it (1–180). Tap a
+live card to refresh it now; move/delete it with the double-tap modify mode
+like any pin. A **red outline with a `!`** means the last refresh failed or
+returned nothing (the card keeps showing its previous value, dimmed).
 
 ## API key via adb (no login screen, no companion app)
 

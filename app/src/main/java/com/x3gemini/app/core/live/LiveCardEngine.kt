@@ -147,15 +147,20 @@ object LiveCardEngine {
                 ?: throw IllegalStateException("no Gemini API key")
 
             val pageText = pin.sourceUrl?.let { fetchPageText(it) }
+            Log.d(
+                TAG,
+                "refreshing '${pin.label}' model=$MODEL grounded=${pin.sourceUrl == null} " +
+                    "query='${pin.payload.take(80)}'"
+            )
             val text = callGemini(apiKey, pin, pageText)
             if (text.equals("UNAVAILABLE", ignoreCase = true)) {
                 failStreak[pin.id] = (failStreak[pin.id] ?: 0) + 1
                 HudPinStore.markStale(pin.id)
-                Log.d(TAG, "'${pin.label}' → UNAVAILABLE")
+                Log.w(TAG, "'${pin.label}' → model returned UNAVAILABLE (marking stale)")
             } else {
                 failStreak.remove(pin.id)
                 HudPinStore.updateContent(pin.id, clampCardText(text))
-                Log.d(TAG, "'${pin.label}' refreshed")
+                Log.d(TAG, "'${pin.label}' refreshed ok (${text.length} chars)")
             }
         } catch (t: Throwable) {
             failStreak[pin.id] = (failStreak[pin.id] ?: 0) + 1
@@ -258,8 +263,13 @@ object LiveCardEngine {
 
         http.newCall(request).execute().use { resp ->
             val bodyText = resp.body?.string().orEmpty()
+            // Log the raw body on every response (truncated). This is the
+            // single most useful diagnostic for a stale card: it shows a
+            // non-200 error verbatim, a safety/grounding block with no
+            // candidates, or a 200 whose text is "UNAVAILABLE".
+            Log.d(TAG, "'${pin.label}' HTTP ${resp.code} body=${bodyText.take(400)}")
             if (!resp.isSuccessful) {
-                Log.w(TAG, "Gemini ${resp.code}: ${bodyText.take(200)}")
+                Log.w(TAG, "Gemini ${resp.code}: ${bodyText.take(400)}")
                 throw RuntimeException("Gemini API ${resp.code}")
             }
             return parseAnswer(bodyText)
