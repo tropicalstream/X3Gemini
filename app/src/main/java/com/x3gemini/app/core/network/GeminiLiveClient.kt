@@ -249,6 +249,28 @@ class GeminiLiveClient(
                 return true
             }
 
+            /** Completion flags arrive as boolean, "true", or an object
+             *  with inner complete/turnComplete booleans (TapInsight port). */
+            private fun JSONObject.optCompletionFlag(vararg keys: String): Boolean {
+                for (key in keys) {
+                    val value = opt(key) ?: continue
+                    when (value) {
+                        is Boolean -> if (value) return true
+                        is String -> if (value.equals("true", ignoreCase = true)) return true
+                        is JSONObject -> {
+                            if (value.optBoolean("complete", false) ||
+                                value.optBoolean("completed", false) ||
+                                value.optBoolean("turnComplete", false) ||
+                                value.optBoolean("turn_complete", false)
+                            ) {
+                                return true
+                            }
+                        }
+                    }
+                }
+                return false
+            }
+
             private fun handleLiveMessage(decoded: String) {
                 runCatching {
                     val root = JSONObject(decoded)
@@ -319,11 +341,12 @@ class GeminiLiveClient(
                             }
                         }
 
-                        val turnComplete =
-                            serverContent.optBoolean("turnComplete", false) ||
-                                serverContent.optBoolean("turn_complete", false) ||
-                                serverContent.optBoolean("generationComplete", false) ||
-                                serverContent.optBoolean("generation_complete", false)
+                        val turnComplete = serverContent.optCompletionFlag(
+                            "turnComplete",
+                            "turn_complete",
+                            "generationComplete",
+                            "generation_complete"
+                        )
                         if (turnComplete) {
                             listener.onTurnComplete(null)
                         }
