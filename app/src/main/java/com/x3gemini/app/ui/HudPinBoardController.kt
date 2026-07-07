@@ -281,22 +281,34 @@ class HudPinBoardController(
 
         val header = LinearLayout(activity)
         header.orientation = LinearLayout.HORIZONTAL
+        header.gravity = Gravity.CENTER_VERTICAL
         val label = TextView(activity)
         label.layoutParams = LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
         )
         label.text = pin.label.uppercase(Locale.US)
         label.setTextColor(0xFF7FDBFF.toInt())
         label.textSize = 8f
         label.typeface = Typeface.DEFAULT_BOLD
         label.maxLines = 1
+        // Cap so a long title still leaves the age beside it (not off-card).
+        label.maxWidth = dp(150)
         label.ellipsize = android.text.TextUtils.TruncateAt.END
         header.addView(label)
-        val age = TextView(activity)
-        age.text = if (pin.stale) "!" else ageText(pin.updatedAt)
-        age.setTextColor(if (pin.stale) 0xFFFF5252.toInt() else 0x99FFFFFF.toInt())
-        age.textSize = 8f
-        header.addView(age)
+        // Refresh age sits right beside the title — "WORLD CUP · 5m" — with a
+        // dim middot separator, instead of being pushed to the far edge.
+        val ageLabel = if (pin.stale) "stale" else ageText(pin.updatedAt)
+        if (ageLabel.isNotBlank()) {
+            val age = TextView(activity)
+            age.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = dp(5); leftMargin = dp(5) }
+            age.text = "·  $ageLabel"
+            age.setTextColor(if (pin.stale) 0xFFFF5252.toInt() else 0x80FFFFFF.toInt())
+            age.textSize = 8f
+            header.addView(age)
+        }
         col.addView(header)
 
         val body = TextView(activity)
