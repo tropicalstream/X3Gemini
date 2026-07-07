@@ -2,6 +2,11 @@
 build/
 app/build/
 local.properties
+
+# API key — NEVER commit it. It is pushed to the device over adb
+# (see README), not stored in the repo.
+gemini_api_key.txt
+*.key
 .DS_Store
 *.iml
 .idea/
