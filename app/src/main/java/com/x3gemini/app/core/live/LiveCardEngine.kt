@@ -49,6 +49,9 @@ object LiveCardEngine {
 
     private const val TAG = "LiveCardEngine"
     private const val MODEL = "gemini-2.5-flash"
+
+    /** Max lines a live card renders / the model is allowed to return. */
+    const val MAX_CARD_LINES = 12
     private const val API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
     /** Engine tick — how often due-ness is evaluated, NOT a refresh rate. */
@@ -61,12 +64,14 @@ object LiveCardEngine {
     private const val PAGE_TEXT_CAP = 12_000
 
     private const val SYSTEM_INSTRUCTION =
-        "You refresh ONE tiny live info card on an AR-glasses heads-up display. " +
-            "Output ONLY the card text: at most 3 lines, at most ~42 characters per " +
-            "line, plain text, no markdown, no quotes, no labels, no preamble. " +
-            "Prefer hard facts — scores, numbers, headlines, names — over prose. " +
-            "If a previous card text is provided and the user is watching for " +
-            "changes, lead with what changed. If the information cannot be " +
+        "You refresh ONE compact live info card on an AR-glasses heads-up display. " +
+            "Output ONLY the card text: up to $MAX_CARD_LINES lines, one item per line, " +
+            "at most ~42 characters per line, plain text, no markdown, no quotes, no " +
+            "labels, no preamble. Give as many relevant items as the user asked for " +
+            "(e.g. 'top 4 headlines' = 4 lines); when no count is implied, a few lines " +
+            "is plenty — never pad. Prefer hard facts — scores, numbers, headlines, " +
+            "names — over prose. If a previous card text is provided and the user is " +
+            "watching for changes, lead with what changed. If the information cannot be " +
             "determined from what you're given, output exactly: UNAVAILABLE"
 
     @SuppressLint("StaticFieldLeak") // application context only
@@ -296,11 +301,11 @@ object LiveCardEngine {
         return out
     }
 
-    /** Belt-and-braces enforcement of the card contract (≤3 lines). */
+    /** Belt-and-braces enforcement of the card contract. */
     private fun clampCardText(text: String): String =
         text.lines()
             .map { it.trim() }
             .filter { it.isNotBlank() }
-            .take(3)
+            .take(MAX_CARD_LINES)
             .joinToString("\n") { it.take(48) }
 }

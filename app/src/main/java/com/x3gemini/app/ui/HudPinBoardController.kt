@@ -17,6 +17,7 @@ import android.widget.TextView
 import com.x3gemini.app.R
 import com.x3gemini.app.core.bridge.HudPinStore
 import com.x3gemini.app.core.bridge.HudPinStore.HudPin
+import com.x3gemini.app.core.live.LiveCardEngine
 import java.net.URL
 import java.util.Locale
 
@@ -209,7 +210,16 @@ class HudPinBoardController(
         val (w, h) = when (pin.type) {
             HudPinStore.TYPE_NOTE -> dp(92) to dp(64)
             HudPinStore.TYPE_PICTURE -> dp(64) to dp(48)
-            HudPinStore.TYPE_LIVE -> dp(150) to dp(48)
+            // Live cards grow with their content up to the line cap, so a
+            // "top 10 headlines" card is fully readable instead of clipped
+            // at 2 lines. Height = header + padding + one row per line.
+            HudPinStore.TYPE_LIVE -> {
+                val lineCount = pin.content.ifBlank { pin.label }
+                    .count { it == '\n' }
+                    .plus(1)
+                    .coerceIn(1, LiveCardEngine.MAX_CARD_LINES)
+                dp(210) to dp(LIVE_HEADER_DP + lineCount * LIVE_LINE_DP)
+            }
             else -> dp(92) to dp(46)
         }
         container.layoutParams = FrameLayout.LayoutParams(w, h)
@@ -293,7 +303,7 @@ class HudPinBoardController(
         body.text = pin.content.ifBlank { "…" }
         body.setTextColor(Color.WHITE)
         body.textSize = 9f
-        body.maxLines = 2
+        body.maxLines = LiveCardEngine.MAX_CARD_LINES
         body.ellipsize = android.text.TextUtils.TruncateAt.END
         body.setLineSpacing(0f, 1.05f)
         col.addView(body)
@@ -550,6 +560,11 @@ class HudPinBoardController(
 
     companion object {
         private const val CHIP_TAG = "hud_pin_chip"
+
+        // Live-card box sizing (logical px). Header row + vertical padding,
+        // then one row per content line at 9sp with 1.05 spacing.
+        private const val LIVE_HEADER_DP = 24
+        private const val LIVE_LINE_DP = 13
 
         /**
          * The under-HUD content zone in the overlay's LOGICAL 640×480
