@@ -1009,6 +1009,11 @@ class MainActivity : AppCompatActivity() {
         }
         val clickable = root.isClickable
         val surface = root.background?.let { !isTransparentBackground(it) } ?: false
+        // The camera preview behaves like empty space: it has a solid
+        // background, but a right-arm tap on it should still fall through
+        // to the idle-activate path rather than being swallowed as an
+        // inert surface (Mars: tapping the preview should start Gemini).
+        if (root.id == R.id.unipanelCameraPreviewFrame) return inertDescendant
         if (!clickable && !surface) return inertDescendant
         val loc = IntArray(2)
         root.getLocationOnScreen(loc)
