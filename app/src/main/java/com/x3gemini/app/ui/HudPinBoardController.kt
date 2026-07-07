@@ -312,7 +312,9 @@ class HudPinBoardController(
         col.addView(header)
 
         val body = TextView(activity)
-        body.text = pin.content.ifBlank { "…" }
+        // Clearer than a bare "…": a never-loaded card reads "updating…",
+        // and one that's failed enough to be stale reads "unavailable".
+        body.text = pin.content.ifBlank { if (pin.stale) "unavailable" else "updating…" }
         body.setTextColor(Color.WHITE)
         body.textSize = 9f
         body.maxLines = LiveCardEngine.MAX_CARD_LINES

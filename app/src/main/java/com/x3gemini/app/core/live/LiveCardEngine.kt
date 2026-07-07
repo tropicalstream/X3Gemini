@@ -138,16 +138,23 @@ object LiveCardEngine {
 
     private fun isDue(pin: HudPin, now: Long): Boolean {
         if (forced.contains(pin.id)) return true
+        val streak = failStreak[pin.id] ?: 0
+        val anchor = maxOf(pin.updatedAt, lastAttemptMs[pin.id] ?: 0L)
+        // A card that has never loaded retries at the fast tick cadence
+        // (not the 1-min floor) until it gets its first content — so a
+        // transient blip on the very first fetch fills in within ~20s
+        // instead of leaving the card on 'updating…'. Once it has failed
+        // enough to be stale, fall through to the normal backed-off cadence.
+        if (pin.updatedAt == 0L && streak < STALE_AFTER_FAILURES) {
+            return now - anchor >= TICK_SECONDS * 1000L
+        }
         val interval = maxOf(pin.intervalSec, MIN_INTERVAL_SEC) * 1000L
         // Don't slow the retry cadence for the first few transient misses —
         // that's what lets a card recover on the very next tick instead of
-        // lingering. Only once a card is genuinely stale (>= STALE_AFTER_
-        // FAILURES consecutive misses) do we back off to spare battery +
-        // API quota on a dead source.
-        val streak = failStreak[pin.id] ?: 0
+        // lingering. Only once a card is genuinely stale do we back off to
+        // spare battery + API quota on a dead source.
         val backoffSteps = (streak - STALE_AFTER_FAILURES + 1).coerceIn(0, 3)
         val effective = interval * (1 shl backoffSteps)
-        val anchor = maxOf(pin.updatedAt, lastAttemptMs[pin.id] ?: 0L)
         return now - anchor >= effective
     }
 
