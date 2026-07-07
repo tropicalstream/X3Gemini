@@ -58,6 +58,10 @@ object LiveCardEngine {
     private const val TICK_SECONDS = 20L
     /** Floor for per-pin refresh intervals. */
     private const val MIN_INTERVAL_SEC = 60
+
+    /** Consecutive failed refreshes before a card is shown as stale.
+     *  Tolerates transient rate-limit / grounding / UNAVAILABLE blips. */
+    private const val STALE_AFTER_FAILURES = 3
     /** Page fetch limits. */
     private const val FETCH_TIMEOUT_MS = 8_000
     private const val FETCH_MAX_BYTES = 96 * 1024
@@ -135,11 +139,14 @@ object LiveCardEngine {
     private fun isDue(pin: HudPin, now: Long): Boolean {
         if (forced.contains(pin.id)) return true
         val interval = maxOf(pin.intervalSec, MIN_INTERVAL_SEC) * 1000L
-        // Back off failing sources: each consecutive failure doubles the
-        // effective interval (capped at 8×) so a dead URL doesn't burn
-        // battery + API quota every cycle.
+        // Don't slow the retry cadence for the first few transient misses —
+        // that's what lets a card recover on the very next tick instead of
+        // lingering. Only once a card is genuinely stale (>= STALE_AFTER_
+        // FAILURES consecutive misses) do we back off to spare battery +
+        // API quota on a dead source.
         val streak = failStreak[pin.id] ?: 0
-        val effective = interval * (1 shl minOf(streak, 3))
+        val backoffSteps = (streak - STALE_AFTER_FAILURES + 1).coerceIn(0, 3)
+        val effective = interval * (1 shl backoffSteps)
         val anchor = maxOf(pin.updatedAt, lastAttemptMs[pin.id] ?: 0L)
         return now - anchor >= effective
     }
@@ -159,18 +166,38 @@ object LiveCardEngine {
             )
             val text = callGemini(apiKey, pin, pageText)
             if (text.equals("UNAVAILABLE", ignoreCase = true)) {
-                failStreak[pin.id] = (failStreak[pin.id] ?: 0) + 1
-                HudPinStore.markStale(pin.id)
-                Log.w(TAG, "'${pin.label}' → model returned UNAVAILABLE (marking stale)")
+                noteFailure(pin, "model returned UNAVAILABLE")
             } else {
                 failStreak.remove(pin.id)
                 HudPinStore.updateContent(pin.id, clampCardText(text))
                 Log.d(TAG, "'${pin.label}' refreshed ok (${text.length} chars)")
             }
         } catch (t: Throwable) {
-            failStreak[pin.id] = (failStreak[pin.id] ?: 0) + 1
+            noteFailure(pin, t.message ?: "refresh failed")
+        }
+    }
+
+    /**
+     * A single failed refresh does NOT immediately stale the card.
+     * Transient misses are common (rate limits, a momentary grounding
+     * blip, a one-off UNAVAILABLE), so keep showing the last good content
+     * and only flip to the dimmed red 'stale' state after
+     * [STALE_AFTER_FAILURES] consecutive misses. The retry stays at the
+     * normal cadence until then (see [isDue]), so most cards recover on
+     * the next tick and never visibly go stale at all.
+     */
+    private fun noteFailure(pin: HudPin, reason: String) {
+        val streak = (failStreak[pin.id] ?: 0) + 1
+        failStreak[pin.id] = streak
+        if (streak >= STALE_AFTER_FAILURES) {
             HudPinStore.markStale(pin.id)
-            Log.w(TAG, "'${pin.label}' refresh failed: ${t.message}")
+            Log.w(TAG, "'${pin.label}' stale after $streak consecutive misses ($reason)")
+        } else {
+            Log.d(
+                TAG,
+                "'${pin.label}' transient miss $streak/$STALE_AFTER_FAILURES " +
+                    "($reason) — keeping last content"
+            )
         }
     }
 
