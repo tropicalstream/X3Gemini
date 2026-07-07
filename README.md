@@ -43,23 +43,32 @@ watching the Warriors score"*, *"take a photo"*, *"remove the … pin"*,
 
 ## API key via adb (no login screen, no companion app)
 
-Two ways — the **file wins** if both are set:
+Two ways — if both are set, the **file wins**:
 
-**1. File push** (recommended; survives app restarts and re-installs of the same build):
+**1. Broadcast** (recommended — works even before first launch; persists to
+app prefs and survives restarts):
+
+```bash
+adb shell am start -n com.x3gemini.app/.MainActivity   # skip if already running
+adb shell am broadcast -a com.x3gemini.app.SET_API_KEY --es key "AIza...your-key..."
+```
+
+**2. File push** (only after the app has been launched once — the target
+directory is created by the app, and Android 12 scoped storage forbids adb
+from creating it: you'll get `remote secure_mkdirs failed: Operation not
+permitted` on a fresh install):
 
 ```bash
 echo "AIza...your-key..." > gemini_api_key.txt
 adb push gemini_api_key.txt /sdcard/Android/data/com.x3gemini.app/files/gemini_api_key.txt
 ```
 
-> The app must have been launched at least once so the directory exists.
-> The key is re-read within ~10 s (no restart needed).
-
-**2. Broadcast** (persists to app prefs):
-
-```bash
-adb shell am broadcast -a com.x3gemini.app.SET_API_KEY --es key "AIza...your-key..."
-```
+> Either way the key is re-read within ~10 s (no restart needed).
+> Expected key format: a Gemini Developer API key from
+> [aistudio.google.com](https://aistudio.google.com) — it starts with `AIza`.
+> Keys starting with `AQ.` are Vertex AI express-mode keys and will NOT
+> authenticate against the `generativelanguage.googleapis.com` Live endpoint
+> this app uses.
 
 ## Build + install (Mars runs these)
 
