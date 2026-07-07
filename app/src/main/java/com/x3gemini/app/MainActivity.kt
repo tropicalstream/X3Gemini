@@ -526,7 +526,16 @@ class MainActivity : AppCompatActivity() {
             uiHandler.post {
                 dot?.visibility = if (on) View.VISIBLE else View.GONE
                 previewFrame?.visibility = if (on) View.VISIBLE else View.GONE
-                if (on) repositionCameraPreview()
+                if (on) {
+                    repositionCameraPreview()
+                    // Opening the camera preview auto-starts Gemini so the
+                    // frames have somewhere to go. Guarded to IDLE so opening
+                    // the camera mid-session doesn't toggle the session off.
+                    if (HudStateBridge.current().phase == HudStateBridge.VoicePhase.IDLE) {
+                        Log.i(TAG, "camera opened → auto-activating Gemini")
+                        toggleGeminiSession()
+                    }
+                }
                 // The preview is a grid blocker — re-slot pins once it
                 // has its final bounds.
                 previewFrame?.post { hudPinBoardController?.refreshZone() }
