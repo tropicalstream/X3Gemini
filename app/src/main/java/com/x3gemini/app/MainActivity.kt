@@ -48,10 +48,11 @@ import com.x3gemini.app.ui.HudPinBoardController
  *
  * Controls:
  *   • Right trackpad (cyttsp5_mt) — moves the cursor; the physical tap
- *     arrives as a KEY (KEYCODE_BUTTON_A / DPAD_CENTER): single tap =
- *     click at cursor, DOUBLE tap = toggle the Gemini session (or pin
- *     modify mode when the cursor rests on a pin).
- *   • Left arm (cyttsp6_mt) — DOUBLE tap toggles the camera preview.
+ *     arrives as a KEY (KEYCODE_BUTTON_A / DPAD_CENTER). Single tap =
+ *     click at cursor, and on empty space while idle it starts a
+ *     session (tap anywhere to talk). DOUBLE tap = toggle the Gemini
+ *     session (or pin modify mode when the cursor rests on a pin).
+ *   • Left arm (cyttsp6_mt) — SINGLE tap toggles the camera preview.
  *   • Avatar orb tap — also toggles the Gemini session.
  */
 class MainActivity : AppCompatActivity() {
@@ -100,7 +101,6 @@ class MainActivity : AppCompatActivity() {
     private var leftArmTapDownY = 0f
     private var leftArmTapTracking = false
     private var leftArmTapMovedTooFar = false
-    private var leftArmLastTapUpMs: Long = 0L
 
     // ── HUD subscriptions / receivers ─────────────────────────────────
     private var batteryReceiver: BroadcastReceiver? = null
@@ -301,6 +301,16 @@ class MainActivity : AppCompatActivity() {
     private fun setupVoiceOrb() {
         val orb = findViewById<View?>(R.id.unipanelVoiceOrb) ?: return
         orb.setOnClickListener { toggleGeminiSession() }
+        // Clip the avatar image to a clean circle so it always reads as a
+        // round orb (and never a clipped square), matching TapInsight.
+        findViewById<ImageView?>(R.id.unipanelVoiceOrbImage)?.apply {
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setOval(0, 0, view.width, view.height)
+                }
+            }
+            clipToOutline = true
+        }
     }
 
     private fun startHudStateObserver() {
@@ -686,30 +696,16 @@ class MainActivity : AppCompatActivity() {
                 val wasTracking = leftArmTapTracking
                 val movedTooFar = leftArmTapMovedTooFar
                 leftArmTapTracking = false
-                if (!wasTracking || movedTooFar) {
-                    leftArmLastTapUpMs = 0L
-                    return
-                }
+                if (!wasTracking || movedTooFar) return
                 val elapsed = SystemClock.uptimeMillis() - leftArmTapDownTimeMs
-                if (elapsed >= TAP_MAX_MS) {
-                    leftArmLastTapUpMs = 0L
-                    return
-                }
-                val now = SystemClock.uptimeMillis()
-                val gap = now - leftArmLastTapUpMs
-                val isDoubleTap = leftArmLastTapUpMs > 0L &&
-                    gap in DOUBLE_TAP_MIN_GAP_MS..DOUBLE_TAP_WINDOW_MS
-                if (isDoubleTap) {
-                    leftArmLastTapUpMs = 0L
-                    Log.i(TAG, "Left-arm double-tap (gap=${gap}ms) → toggle camera")
-                    toggleCamera()
-                } else {
-                    leftArmLastTapUpMs = now
-                }
+                if (elapsed >= TAP_MAX_MS) return
+                // A single left-arm tap toggles the camera preview
+                // (open ↔ close), per Mars's spec.
+                Log.i(TAG, "Left-arm single tap (${elapsed}ms) → toggle camera")
+                toggleCamera()
             }
             MotionEvent.ACTION_CANCEL -> {
                 leftArmTapTracking = false
-                leftArmLastTapUpMs = 0L
             }
         }
     }
@@ -872,7 +868,19 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
         }
-        val hit = findOverlayHit(screenX, screenY) ?: return false
+        val hit = findOverlayHit(screenX, screenY)
+        if (hit == null) {
+            // Empty space: a plain tap ANYWHERE starts a session when idle,
+            // so the user never has to land the cursor on the small orb.
+            // While a session is active an empty tap does nothing — the
+            // right-arm double-tap is what closes it.
+            if (HudStateBridge.current().phase == HudStateBridge.VoicePhase.IDLE) {
+                Log.i(TAG, "empty-space tap while idle → activate Gemini")
+                toggleGeminiSession()
+                return true
+            }
+            return false
+        }
         if (!hit.isInteractive) return true
 
         val targetLocation = IntArray(2)

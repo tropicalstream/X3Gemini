@@ -28,10 +28,11 @@ avatar orb** (+ red camera glyph while the camera streams).
 | Gesture | Action |
 |---|---|
 | Right trackpad slide | Move cursor (auto-hides after 6 s) |
-| Right arm single tap | Click at cursor (pins, orb, chat card) |
-| **Right arm double tap** | **Toggle Gemini** — start session / full exit (session + camera + chat card) |
+| **Right arm single tap (empty space, idle)** | **Start Gemini** — tap anywhere to talk |
+| Right arm single tap (on a widget) | Click it (pins, orb, chat card) |
+| **Right arm double tap** | **Toggle Gemini** — start / full exit (session + camera + chat card) |
 | Right arm double tap, cursor **on a pin** | Pin modify mode: next tap moves it, ✕ deletes |
-| **Left arm double tap** | **Toggle camera** (4:3 preview under the HUD, frames stream to Gemini) |
+| **Left arm single tap** | **Toggle camera** (4:3 preview under the HUD, frames stream to Gemini) |
 | Tap avatar orb | Also toggles Gemini |
 | Tap chat card | Expand / collapse the reply reader |
 | Tap a picture pin | Fullscreen viewer (tap again to dismiss) |
