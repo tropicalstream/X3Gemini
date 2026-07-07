@@ -272,6 +272,14 @@ class GeminiLiveClient(
             }
 
             private fun handleLiveMessage(decoded: String) {
+                // Truncated inbound trace. Audio frames are huge base64, so
+                // collapse them to a marker; everything else logs verbatim
+                // (this is how we see turn-taking on follow-ups).
+                if (decoded.contains("\"inlineData\"") && decoded.contains("\"audio/")) {
+                    Log.d(TAG, "inbound: <audio frame ${decoded.length} chars>")
+                } else {
+                    Log.d(TAG, "inbound: ${decoded.take(300)}")
+                }
                 runCatching {
                     val root = JSONObject(decoded)
 

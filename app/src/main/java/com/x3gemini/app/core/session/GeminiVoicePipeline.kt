@@ -66,12 +66,17 @@ class GeminiVoicePipeline(context: Context) {
     private val toolCallsInFlight = AtomicInteger(0)
 
     /**
-     * Late-output gate (TapInsight regression port, commit 8c2b872):
-     * outputTranscription chunks arriving AFTER onTurnComplete but
-     * BEFORE the next user turn would otherwise append as a duplicate
-     * assistant card. Set on turnComplete, cleared on next input.
+     * Late-output gate. Its only job is to drop duplicate
+     * outputTranscription chunks that arrive in the brief window right
+     * AFTER onTurnComplete (a known Live quirk that otherwise appends a
+     * duplicate assistant card).
+     *
+     * This is a TIME-BOUNDED window, not "until the next input turn":
+     * native-audio Gemini often omits inputTranscription entirely, so a
+     * "clear on next input" gate would latch forever and silently drop
+     * every follow-up's transcript after turn 1. Expiring by time can't.
      */
-    @Volatile private var dropOutputTranscriptionUntilNextInput: Boolean = false
+    @Volatile private var dropLateOutputUntilMs: Long = 0L
 
     private val audioPlayer: GeminiAudioPlayer by lazy { GeminiAudioPlayer(appContext) }
 
@@ -207,7 +212,7 @@ class GeminiVoicePipeline(context: Context) {
 
         connectJob?.cancel()
         connectJob = null
-        dropOutputTranscriptionUntilNextInput = false
+        dropLateOutputUntilMs = 0L
 
         // Releasing the AudioTrack beats pause/flush in the service path:
         // stale Live callbacks can't keep speaking on a detached track.
@@ -295,11 +300,8 @@ class GeminiVoicePipeline(context: Context) {
                 if (!isSessionEpochCurrent(epoch)) return
                 if (text.isBlank()) return
                 noteConversationActivity()
-                if (dropOutputTranscriptionUntilNextInput) {
-                    Log.d(TAG, "onInputTranscription: releasing late-output gate")
-                    dropOutputTranscriptionUntilNextInput = false
-                }
                 latestInputTranscript = text
+                Log.d(TAG, "onInputTranscription: '${text.take(120)}'")
                 // Live partial transcript in the HUD; final commit happens
                 // on turnComplete to avoid mid-utterance noise.
                 HudStateBridge.update { it.copy(transcript = text) }
@@ -309,10 +311,11 @@ class GeminiVoicePipeline(context: Context) {
                 if (!isSessionEpochCurrent(epoch)) return
                 if (text.isBlank()) return
                 noteConversationActivity()
-                if (dropOutputTranscriptionUntilNextInput) {
-                    Log.d(TAG, "Dropping late outputTranscription after turnComplete: '${text.take(120)}'")
+                if (SystemClock.uptimeMillis() < dropLateOutputUntilMs) {
+                    Log.d(TAG, "Dropping late outputTranscription (post-turn window): '${text.take(120)}'")
                     return
                 }
+                Log.d(TAG, "onOutputTranscription: '${text.take(120)}'")
                 runCatching { chat.appendLiveAssistantStreamChunk(text) }
                 HudStateBridge.update {
                     it.copy(phase = HudStateBridge.VoicePhase.THINKING)
@@ -329,6 +332,7 @@ class GeminiVoicePipeline(context: Context) {
                 if (!isSessionEpochCurrent(epoch) || !liveSessionReady) return
                 if (data.isEmpty()) return
                 noteConversationActivity()
+                Log.d(TAG, "onModelAudio: ${data.size} bytes ($mimeType)")
                 runCatching {
                     audioPlayer.playChunk(mimeType, data, muted = false, volume = 1f)
                 }
@@ -371,7 +375,7 @@ class GeminiVoicePipeline(context: Context) {
                 if (!isSessionEpochCurrent(epoch)) return
                 noteConversationActivity()
                 Log.d(TAG, "onTurnComplete: finishReason=$finishReason")
-                dropOutputTranscriptionUntilNextInput = true
+                dropLateOutputUntilMs = SystemClock.uptimeMillis() + LATE_OUTPUT_DROP_MS
                 runCatching { chat.appendUserUtterance(latestInputTranscript) }
                 runCatching { chat.commitLiveAssistantStreamIfNeeded() }
                 runCatching { chat.resetLiveAssistantStream() }
@@ -602,6 +606,11 @@ class GeminiVoicePipeline(context: Context) {
         /** Mars's spec: mutual silence that ends the conversation. */
         private const val SILENCE_END_MS = 5_000L
         private const val SILENCE_WATCHDOG_TICK_MS = 250L
+
+        /** How long after a turn completes to drop duplicate late output
+         *  transcription chunks. Short enough that a real follow-up is
+         *  never suppressed. */
+        private const val LATE_OUTPUT_DROP_MS = 500L
 
         /** How recently a camera frame must have arrived for the feed to
          *  count as live (frames stream ~1.1s apart). */
