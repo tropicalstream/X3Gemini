@@ -89,11 +89,24 @@ class MainActivity : AppCompatActivity() {
     private val cursorGain = 0.45f
     private val hideCursorRunnable = Runnable { setCursorVisible(false) }
 
-    // ── Right-arm KEY tap state (physical tap = KEYCODE, not touch) ──
+    // ── Right-arm tap state ──────────────────────────────────────────
+    // The guide says the right-arm click is a KEY event (KEYCODE_BUTTON_A
+    // / DPAD_CENTER); on this unit it can instead arrive as a TOUCH tap
+    // on cyttsp5 (down+up). Both paths funnel into onRightArmTapUp(),
+    // which dedupes so one physical tap delivered on both paths counts
+    // once.
     private var rightArmKeyDownMs: Long = 0L
     private var rightArmKeyTracking: Boolean = false
     private var rightArmKeyLastTapUpMs: Long = 0L
     private var pendingSingleTapClick: Runnable? = null
+    private var lastRightArmTapUpAcceptedMs: Long = 0L
+
+    // Right-arm TOUCH tap detection (cyttsp5 down+up with little movement).
+    private var rightArmTouchDownMs: Long = 0L
+    private var rightArmTouchDownX: Float = 0f
+    private var rightArmTouchDownY: Float = 0f
+    private var rightArmTouchTracking: Boolean = false
+    private var rightArmTouchMoved: Boolean = false
 
     // ── Left-arm double-tap state (touch path on cyttsp6_mt) ─────────
     private var leftArmTapDownTimeMs: Long = 0L
@@ -656,12 +669,18 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
-        // Right trackpad (cyttsp5_mt) — cursor movement.
+        // Right trackpad (cyttsp5_mt) — cursor movement + touch-tap clicks.
         if (deviceName.contains("cyttsp5", ignoreCase = true)) {
             handleTrackpadCursorTouch(ev)
             return true
         }
 
+        // Diagnostic: any temple input whose device name we didn't match.
+        // If the right pad reports some other name, this reveals it so the
+        // match above can be widened.
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            Log.i(TAG, "unmatched touch device='$deviceName' action=DOWN")
+        }
         return super.dispatchTouchEvent(ev)
     }
 
@@ -718,6 +737,11 @@ class MainActivity : AppCompatActivity() {
                 droppedFirstDelta = false
                 lastTrackpadX = ev.x
                 lastTrackpadY = ev.y
+                rightArmTouchDownMs = SystemClock.uptimeMillis()
+                rightArmTouchDownX = ev.x
+                rightArmTouchDownY = ev.y
+                rightArmTouchMoved = false
+                rightArmTouchTracking = true
                 setCursorVisible(true)
             }
             MotionEvent.ACTION_MOVE -> {
@@ -725,11 +749,34 @@ class MainActivity : AppCompatActivity() {
                 val dy = ev.y - lastTrackpadY
                 lastTrackpadX = ev.x
                 lastTrackpadY = ev.y
+                // A tap must stay roughly put; a slide is a cursor move,
+                // never a click.
+                if (rightArmTouchTracking && !rightArmTouchMoved) {
+                    val tdx = ev.x - rightArmTouchDownX
+                    val tdy = ev.y - rightArmTouchDownY
+                    if (kotlin.math.hypot(tdx.toDouble(), tdy.toDouble()) >
+                            RIGHT_ARM_TAP_MOVE_TOLERANCE_PX) {
+                        rightArmTouchMoved = true
+                    }
+                }
                 if (!droppedFirstDelta) {
                     droppedFirstDelta = true
                     return
                 }
                 moveCursorBy(dx * cursorGain, dy * cursorGain)
+            }
+            MotionEvent.ACTION_UP -> {
+                val tracking = rightArmTouchTracking
+                val moved = rightArmTouchMoved
+                rightArmTouchTracking = false
+                if (!tracking || moved) return
+                val elapsed = SystemClock.uptimeMillis() - rightArmTouchDownMs
+                if (elapsed >= TAP_MAX_MS) return
+                Log.i(TAG, "Right-arm TOUCH tap (${elapsed}ms)")
+                onRightArmTapUp()
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                rightArmTouchTracking = false
             }
         }
     }
@@ -780,8 +827,17 @@ class MainActivity : AppCompatActivity() {
      * Gemini session. DOWN is never consumed.
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Diagnostic: surface every key so we can see whether the right-arm
+        // tap arrives as a key at all, and with what code.
+        if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) {
+            Log.i(
+                TAG,
+                "KEY code=${event.keyCode} action=${event.action} device='${event.device?.name}'"
+            )
+        }
         val isTapKey = event.keyCode == KeyEvent.KEYCODE_BUTTON_A ||
-            event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+            event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+            event.keyCode == KeyEvent.KEYCODE_ENTER
         if (!isTapKey) return super.dispatchKeyEvent(event)
 
         when (event.action) {
@@ -796,36 +852,50 @@ class MainActivity : AppCompatActivity() {
                 if (!rightArmKeyTracking) return true
                 rightArmKeyTracking = false
                 val elapsed = SystemClock.uptimeMillis() - rightArmKeyDownMs
-                if (elapsed >= TAP_MAX_MS) {
-                    rightArmKeyLastTapUpMs = 0L
-                    return true
-                }
-                val now = SystemClock.uptimeMillis()
-                val previous = rightArmKeyLastTapUpMs
-                val gap = now - previous
-                val isDoubleTap = previous > 0L &&
-                    gap in DOUBLE_TAP_MIN_GAP_MS..DOUBLE_TAP_WINDOW_MS
-                if (isDoubleTap) {
-                    rightArmKeyLastTapUpMs = 0L
-                    pendingSingleTapClick?.let { uiHandler.removeCallbacks(it) }
-                    pendingSingleTapClick = null
-                    onRightArmDoubleTap(gap)
-                } else {
-                    rightArmKeyLastTapUpMs = now
-                    // Schedule the single-tap click; a second tap inside
-                    // the window preempts it.
-                    pendingSingleTapClick?.let { uiHandler.removeCallbacks(it) }
-                    val click = Runnable {
-                        pendingSingleTapClick = null
-                        performClickAtCursor()
-                    }
-                    pendingSingleTapClick = click
-                    uiHandler.postDelayed(click, DOUBLE_TAP_WINDOW_MS + 20L)
-                }
+                if (elapsed >= TAP_MAX_MS) return true
+                Log.i(TAG, "Right-arm KEY tap (${elapsed}ms, code=${event.keyCode})")
+                onRightArmTapUp()
                 return true
             }
         }
         return true
+    }
+
+    /**
+     * Shared single/double-tap dispatch for the right arm, driven by
+     * whichever path delivers the tap (KEY event or cyttsp5 touch). A
+     * short dedupe window collapses one physical tap that arrives on
+     * BOTH paths into a single logical tap. Single tap → click at cursor
+     * after the double-tap window; double tap → [onRightArmDoubleTap].
+     */
+    private fun onRightArmTapUp() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastRightArmTapUpAcceptedMs < RIGHT_ARM_TAP_DEDUPE_MS) {
+            // Same physical tap echoed as both a key and a touch — ignore.
+            return
+        }
+        lastRightArmTapUpAcceptedMs = now
+        val previous = rightArmKeyLastTapUpMs
+        val gap = now - previous
+        val isDoubleTap = previous > 0L &&
+            gap in DOUBLE_TAP_MIN_GAP_MS..DOUBLE_TAP_WINDOW_MS
+        if (isDoubleTap) {
+            rightArmKeyLastTapUpMs = 0L
+            pendingSingleTapClick?.let { uiHandler.removeCallbacks(it) }
+            pendingSingleTapClick = null
+            onRightArmDoubleTap(gap)
+        } else {
+            rightArmKeyLastTapUpMs = now
+            // Schedule the single-tap click; a second tap inside the
+            // window preempts it.
+            pendingSingleTapClick?.let { uiHandler.removeCallbacks(it) }
+            val click = Runnable {
+                pendingSingleTapClick = null
+                performClickAtCursor()
+            }
+            pendingSingleTapClick = click
+            uiHandler.postDelayed(click, DOUBLE_TAP_WINDOW_MS + 20L)
+        }
     }
 
     private fun onRightArmDoubleTap(gapMs: Long) {
@@ -973,6 +1043,12 @@ class MainActivity : AppCompatActivity() {
         private const val DOUBLE_TAP_WINDOW_MS = 320L
 
         private const val LEFT_ARM_TAP_MOVE_TOLERANCE_PX = 60f
+        // A right-pad touch that moves less than this (raw px) is a tap,
+        // not a cursor slide.
+        private const val RIGHT_ARM_TAP_MOVE_TOLERANCE_PX = 45f
+        // Collapse one physical tap delivered on both the key and touch
+        // paths. Well below a real double-tap gap (>=150ms typical).
+        private const val RIGHT_ARM_TAP_DEDUPE_MS = 90L
         private const val CURSOR_IDLE_HIDE_MS = 6_000L
         private const val NOTICE_DISPLAY_MS = 3_500L
     }
