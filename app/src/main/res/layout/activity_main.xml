@@ -183,7 +183,7 @@
                 android:maxLines="1"
                 android:singleLine="true"
                 android:textColor="#FFE0F4FF"
-                android:textSize="11sp"
+                android:textSize="12.7sp"
                 android:visibility="gone"
                 tools:ignore="UnusedAttribute" />
 
@@ -259,7 +259,7 @@
                     android:contentDescription="Gemini reply — tap to expand"
                     android:fontFamily="sans-serif-medium"
                     android:textColor="#FFFFFFFF"
-                    android:textSize="11sp"
+                    android:textSize="12.7sp"
                     android:lineSpacingExtra="1dp"
                     android:text="" />
 

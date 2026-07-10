@@ -208,7 +208,7 @@ class HudPinBoardController(
     private fun buildPinView(pin: HudPin): FrameLayout {
         val container = FrameLayout(activity)
         val (w, h) = when (pin.type) {
-            HudPinStore.TYPE_NOTE -> dp(92) to dp(64)
+            HudPinStore.TYPE_NOTE -> dp(100) to dp(74)
             HudPinStore.TYPE_PICTURE -> dp(64) to dp(48)
             // Live cards grow with their content up to the line cap, so a
             // "top 10 headlines" card is fully readable instead of clipped
@@ -218,7 +218,7 @@ class HudPinBoardController(
                     .count { it == '\n' }
                     .plus(1)
                     .coerceIn(1, LiveCardEngine.MAX_CARD_LINES)
-                dp(210) to dp(LIVE_HEADER_DP + lineCount * LIVE_LINE_DP)
+                dp(240) to dp(LIVE_HEADER_DP + lineCount * LIVE_LINE_DP)
             }
             else -> dp(92) to dp(46)
         }
@@ -252,7 +252,7 @@ class HudPinBoardController(
         val tv = TextView(activity)
         tv.text = pin.payload.ifBlank { pin.label }
         tv.setTextColor(0xFF1B1B10.toInt())
-        tv.textSize = 9f
+        tv.textSize = 10.4f
         tv.maxLines = 4
         tv.ellipsize = android.text.TextUtils.TruncateAt.END
         tv.setPadding(dp(6), dp(5), dp(6), dp(5))
@@ -288,7 +288,7 @@ class HudPinBoardController(
         )
         label.text = pin.label.uppercase(Locale.US)
         label.setTextColor(0xFF7FDBFF.toInt())
-        label.textSize = 8f
+        label.textSize = 9.2f
         label.typeface = Typeface.DEFAULT_BOLD
         label.maxLines = 1
         // Cap so a long title still leaves the age beside it (not off-card).
@@ -313,7 +313,7 @@ class HudPinBoardController(
                     else -> 0x80FFFFFF.toInt()                // dim — normal age
                 }
             )
-            age.textSize = 8f
+            age.textSize = 9.2f
             header.addView(age)
         }
         col.addView(header)
@@ -323,7 +323,7 @@ class HudPinBoardController(
         // and one that's failed enough to be stale reads "unavailable".
         body.text = pin.content.ifBlank { if (pin.stale) "unavailable" else "updating…" }
         body.setTextColor(Color.WHITE)
-        body.textSize = 9f
+        body.textSize = 10.4f
         body.maxLines = LiveCardEngine.MAX_CARD_LINES
         body.ellipsize = android.text.TextUtils.TruncateAt.END
         body.setLineSpacing(0f, 1.05f)
@@ -583,9 +583,9 @@ class HudPinBoardController(
         private const val CHIP_TAG = "hud_pin_chip"
 
         // Live-card box sizing (logical px). Header row + vertical padding,
-        // then one row per content line at 9sp with 1.05 spacing.
-        private const val LIVE_HEADER_DP = 24
-        private const val LIVE_LINE_DP = 13
+        // then one row per content line at 10.4sp with 1.05 spacing.
+        private const val LIVE_HEADER_DP = 27
+        private const val LIVE_LINE_DP = 15
 
         /**
          * The under-HUD content zone in the overlay's LOGICAL 640×480
