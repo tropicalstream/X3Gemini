@@ -167,6 +167,14 @@ class MainActivity : AppCompatActivity() {
         setupHudPinBoard()
 
         bindVoiceService()
+
+        // Experimental beta build — shown on every launch until this reaches a
+        // stable release. Full warning lives in README.md; this is the on-glasses
+        // reminder for testers who never open GitHub.
+        uiHandler.postDelayed(
+            { showNotice("⚠️ Experimental beta — not for critical/urgent use") },
+            1_200L
+        )
     }
 
     override fun onDestroy() {

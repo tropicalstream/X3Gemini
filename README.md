@@ -1,5 +1,21 @@
 # X3Gemini
 
+> ## ⚠️ Experimental beta — not for consequential use
+> This is an **unofficial, community-built, work-in-progress** app, not a
+> RayNeo/Mercury product. It is provided for **testing and feedback only**.
+>
+> - **Do not rely on it for anything consequential** — medication, appointments,
+>   safety-critical reminders, or any situation where a missed/incorrect
+>   response would cause real harm or loss. Reminders can fail to fire (OS
+>   killing the process, alarm-permission changes, clock drift); memory and
+>   custom instructions can be mis-applied by the model; voice transcription
+>   can mishear you.
+> - Expect bugs, missing features, and breaking changes between commits.
+> - It talks directly to Google's Gemini API using **your own API key** — you
+>   are responsible for your own usage and any costs on your account.
+> - No warranty of any kind. Use at your own risk, and verify anything
+>   important through another source.
+
 A minimal **Gemini Live voice HUD** for the RayNeo X3 Pro AR glasses, carved out
 of TapInsight's unipanel lineage. One Activity, one foreground Service, **no
 browser** — under the HUD strip is black space (transparent on the waveguide),
@@ -109,6 +125,57 @@ prices, weather). Pinning a static thing (link/video/station) is declined —
 there's no browser here. Default refresh is 5 min; add *"refresh every N
 minutes"* to change it (1–180). Tap a card to refresh now; move/delete it with
 the double-tap modify mode.
+
+### Memory (persists across sessions)
+
+| Say | What happens |
+|---|---|
+| *"Remember that my car is parked on level 3."* | Stored durably; available in every future conversation. |
+| *"Remember my name is Mars and I live in Oakland."* | Same — the assistant also auto-remembers clearly durable facts you share. |
+| *"What do you remember?"* / *"Forget the parking one."* | List / delete memories. |
+
+Memory is injected into every session's system prompt (max 60 entries; oldest
+drop first). It lives on-device in `assistant_store` prefs — no cloud.
+
+### Custom instructions (personality)
+
+Say *"From now on, always answer in one short sentence"*, *"call me Mars"*,
+*"act like a formal butler"* — stored persistently and applied to every future
+session (and immediately in the current one). *"Show your instructions"* /
+*"clear your instructions"* to inspect or reset. Long text is easier over adb:
+
+```bash
+adb shell am broadcast -a com.x3gemini.app.SET_INSTRUCTIONS \
+  --es text "Call me Mars. Be concise. Prefer metric units."
+```
+
+(While the app is cold, target the manifest receiver explicitly:
+`-n com.x3gemini.app/.core.config.InstructionsBroadcastReceiver`.)
+
+### Reminders (notification + HUD)
+
+| Say | What happens |
+|---|---|
+| *"Remind me to take out the trash at 8pm."* | One-shot reminder. |
+| *"Remind me in 20 minutes to flip the laundry."* | Relative time. |
+| *"Remind me every morning at 7:30 to run my morning report."* | Daily repeating. |
+| *"What are my reminders?"* / *"Cancel the trash one."* | List / cancel. |
+
+At fire time the glasses show a **system notification** and pin a **⏰ note to
+the HUD** (stays until you remove it). Reminders survive reboots — they're
+re-armed on boot and app start; ones missed while powered off fire immediately.
+
+### Custom commands (saved prompts)
+
+- *"Save a command called **morning report** that tells me the weather in
+  Oakland, my reminders for today, and the top three AI headlines."*
+- *"Run my morning report."* — the saved prompt executes in full, using web
+  search and any tools it needs.
+- *"What commands do I have?"* / *"Delete the morning report command."*
+
+Pair with a daily reminder (*"remind me every morning at 8 to run my morning
+report"*) for a hands-free-ish daily briefing — say "run it" when the reminder
+pops.
 
 ---
 

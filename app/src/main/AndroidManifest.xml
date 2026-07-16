@@ -18,6 +18,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Reminders: exact alarms (Android 12+ special permission — granted by
+         default on the X3's Android 12; setWindow fallback if revoked) and
+         boot re-registration, since alarms don't survive reboots. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
@@ -77,6 +83,29 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="com.x3gemini.app.SET_API_KEY" />
+            </intent-filter>
+        </receiver>
+
+        <!-- adb path for long custom-instruction text (voice handles short
+             ones); exact command in README.md (SET_INSTRUCTIONS with an
+             "es" string extra named "text"). -->
+        <receiver
+            android:name=".core.config.InstructionsBroadcastReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.x3gemini.app.SET_INSTRUCTIONS" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Reminder alarm fire + boot/update re-registration. exported=false:
+             AlarmManager targets it explicitly and protected system broadcasts
+             (BOOT_COMPLETED) are delivered regardless. -->
+        <receiver
+            android:name=".core.reminders.ReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

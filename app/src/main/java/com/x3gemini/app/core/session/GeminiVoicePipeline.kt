@@ -83,7 +83,11 @@ class GeminiVoicePipeline(context: Context) {
     private val liveClient: GeminiLiveClient by lazy {
         GeminiLiveClient(
             apiKeyProvider = { ApiKeyStore.resolve(appContext) },
-            previousChatContextProvider = { chat.getPreviousChatContext() }
+            previousChatContextProvider = { chat.getPreviousChatContext() },
+            personalizationProvider = {
+                com.x3gemini.app.core.config.AssistantStore.init(appContext)
+                com.x3gemini.app.core.config.AssistantStore.promptSection()
+            }
         )
     }
 

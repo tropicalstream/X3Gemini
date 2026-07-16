@@ -5,9 +5,12 @@ import android.util.Log
 import org.json.JSONObject
 
 /**
- * Routes Gemini Live tool calls to X3Gemini's two native tools:
- * camera_action and hud_pin. Slimmed from TapInsight's ToolDispatcher
- * (which carried a dozen Google/agent/browser tools).
+ * Routes Gemini Live tool calls to X3Gemini's native tools:
+ * camera_action, hud_pin, and the "real assistant" trio —
+ * assistant_memory (memory + custom instructions), reminder
+ * (notification + HUD delivery), and custom_command (saved prompts).
+ * Slimmed from TapInsight's ToolDispatcher (which carried a dozen
+ * Google/agent/browser tools).
  */
 class ToolDispatcher(
     context: Context,
@@ -20,7 +23,10 @@ class ToolDispatcher(
 
     private val tools: Map<String, AiTapTool> = listOf(
         CameraTool(context, cameraFrameProvider),
-        HudPinTool(context, cameraFrameProvider)
+        HudPinTool(context, cameraFrameProvider),
+        MemoryTool(context),
+        ReminderTool(context),
+        CommandTool(context)
     ).associateBy { it.name }
 
     fun isSupported(name: String): Boolean = tools.containsKey(name.trim())

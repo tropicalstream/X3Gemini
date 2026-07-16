@@ -26,7 +26,14 @@ import java.util.concurrent.TimeUnit
  */
 class GeminiLiveClient(
     private val apiKeyProvider: () -> String?,
-    private val previousChatContextProvider: () -> String? = { null }
+    private val previousChatContextProvider: () -> String? = { null },
+    /**
+     * Personalization block (custom instructions + memories + saved command
+     * names) from AssistantStore — appended to the system prompt every
+     * session, which is what makes memory persist across the stateless
+     * Live connections.
+     */
+    private val personalizationProvider: () -> String? = { null }
 ) {
 
     companion object {
@@ -49,6 +56,20 @@ class GeminiLiveClient(
                 "- camera_action: save a photo of what the camera sees (action=save_photo).\n" +
                 "- hud_pin: manage the HUD pin board — post-it notes, pictures, and live " +
                 "auto-refreshing info cards placed on the display.\n" +
+                "- assistant_memory: PERSISTENT MEMORY and CUSTOM INSTRUCTIONS. When the user " +
+                "says 'remember …' or states a clearly durable personal fact or preference " +
+                "(their name, home city, dietary needs, 'I always …'), call action=remember " +
+                "with a one-line summary and confirm briefly. Never store one-off trivia. " +
+                "When the user personalizes you ('from now on always …', 'call me …', 'be " +
+                "more concise'), call action=set_instructions with the full instruction text " +
+                "and follow it immediately.\n" +
+                "- reminder: set/list/cancel reminders ('remind me to … at …', 'remind me in " +
+                "20 minutes'). Delivery is a notification plus a ⏰ pin on the HUD. Compute " +
+                "'at' from the CURRENT DATE/TIME given below (device-local, yyyy-MM-dd HH:mm), " +
+                "or pass in_minutes. repeat_daily=true for 'every day/morning/night'.\n" +
+                "- custom_command: saved named prompts. 'Save a command called X that does Y' " +
+                "→ action=save. 'Run my X' → action=run, then CARRY OUT the returned prompt " +
+                "completely (it may use search, reminders, pins). Great for a morning report.\n" +
                 "- Web search grounding is available for current information.\n\n" +
                 "CONSTRAINTS:\n" +
                 "- There is NO web browser on this device. You cannot open web pages, play " +
@@ -177,6 +198,11 @@ class GeminiLiveClient(
                 if (setupSent) return true
                 val effectivePrompt = buildString {
                     append(SYSTEM_PROMPT_BASE)
+                    // Personalization (custom instructions, memories, saved
+                    // commands) — the persistence layer the Live API lacks.
+                    personalizationProvider()?.trim()?.takeIf { it.isNotBlank() }?.let {
+                        append(it)
+                    }
                     // Authoritative local date/time from the device clock —
                     // without it the model answers in UTC (TapInsight lesson).
                     run {
@@ -486,6 +512,79 @@ class GeminiLiveClient(
                         .put("description", "add_live only: what to watch, in plain language."))
                     .put("interval_minutes", JSONObject().put("type", "STRING")
                         .put("description", "add_live only: refresh cadence in minutes, 1-180. Default 5.")))
+                .put("required", JSONArray().put("action"))))
+
+        tools.put(JSONObject()
+            .put("name", "assistant_memory")
+            .put("description",
+                "Persistent memory and custom instructions — they survive across sessions. " +
+                    "remember — store a durable fact the user shares or asks you to keep " +
+                    "('remember that my car is parked on level 3', 'my name is Mars'); pass a " +
+                    "concise one-line summary in 'text'. " +
+                    "forget — delete the memory matching 'text'. " +
+                    "list — recite stored memories. clear — delete all memories. " +
+                    "set_instructions — save persistent personalization when the user says " +
+                    "'from now on…', 'always…', 'call me…', 'act like…'; pass the complete " +
+                    "instruction text in 'text' (replaces previous instructions, so merge in " +
+                    "anything the user wants kept). " +
+                    "show_instructions / clear_instructions — inspect or remove them. " +
+                    "After the tool returns, confirm in one short sentence.")
+            .put("parameters", JSONObject()
+                .put("type", "OBJECT")
+                .put("properties", JSONObject()
+                    .put("action", JSONObject().put("type", "STRING")
+                        .put("description", "One of: remember, forget, list, clear, set_instructions, show_instructions, clear_instructions."))
+                    .put("text", JSONObject().put("type", "STRING")
+                        .put("description", "remember/forget: the fact. set_instructions: the full instruction text.")))
+                .put("required", JSONArray().put("action"))))
+
+        tools.put(JSONObject()
+            .put("name", "reminder")
+            .put("description",
+                "Reminders with real delivery: at the set time the glasses show a system " +
+                    "notification AND pin a ⏰ note to the HUD. " +
+                    "set — needs 'text' (what to remind) plus either 'at' (device-LOCAL time " +
+                    "'yyyy-MM-dd HH:mm', computed from the CURRENT DATE/TIME in your system " +
+                    "instructions) or 'in_minutes' (e.g. '20'). Optional repeat_daily='true' " +
+                    "for 'every day / every morning'. " +
+                    "list — recite pending reminders. cancel — remove the one matching 'text'. " +
+                    "After the tool returns, confirm the scheduled time in one short sentence.")
+            .put("parameters", JSONObject()
+                .put("type", "OBJECT")
+                .put("properties", JSONObject()
+                    .put("action", JSONObject().put("type", "STRING")
+                        .put("description", "One of: set, list, cancel."))
+                    .put("text", JSONObject().put("type", "STRING")
+                        .put("description", "What to remind (set) or which reminder to cancel (fuzzy matched)."))
+                    .put("at", JSONObject().put("type", "STRING")
+                        .put("description", "Local fire time 'yyyy-MM-dd HH:mm' (24h). Alternative to in_minutes."))
+                    .put("in_minutes", JSONObject().put("type", "STRING")
+                        .put("description", "Fire this many minutes from now. Alternative to at."))
+                    .put("repeat_daily", JSONObject().put("type", "STRING")
+                        .put("description", "'true' to repeat every 24h (daily standup, morning report).")))
+                .put("required", JSONArray().put("action"))))
+
+        tools.put(JSONObject()
+            .put("name", "custom_command")
+            .put("description",
+                "Saved named prompts the user can trigger by name — e.g. a personalized " +
+                    "morning report. " +
+                    "save — store 'prompt' under 'name' ('save a command called morning " +
+                    "report that gives me the weather, my reminders, and top AI news'). " +
+                    "run — retrieve the prompt for 'name' (fuzzy matched); the result " +
+                    "contains the prompt — then EXECUTE it fully as if the user just said " +
+                    "it, using web search and any tools it needs. " +
+                    "list — recite saved command names. delete — remove one by 'name'. " +
+                    "Tip: pair with reminder repeat_daily to nudge the user to run it.")
+            .put("parameters", JSONObject()
+                .put("type", "OBJECT")
+                .put("properties", JSONObject()
+                    .put("action", JSONObject().put("type", "STRING")
+                        .put("description", "One of: save, run, list, delete."))
+                    .put("name", JSONObject().put("type", "STRING")
+                        .put("description", "The command's name, e.g. 'morning report'."))
+                    .put("prompt", JSONObject().put("type", "STRING")
+                        .put("description", "save only: the full prompt text to store.")))
                 .put("required", JSONArray().put("action"))))
 
         return tools
