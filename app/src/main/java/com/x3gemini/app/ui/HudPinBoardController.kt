@@ -59,6 +59,23 @@ class HudPinBoardController(
     private val pinViews = LinkedHashMap<String, FrameLayout>() // pin id → container
     private var pinsSnapshot: List<HudPin> = emptyList()
 
+    /**
+     * Countdown pin id → the TextView showing its remaining time, plus the
+     * deadline. The 1s tick writes ONLY into these views: render() rebuilds
+     * the whole board and exits modify mode, so ticking through it would
+     * fight the user mid pin-drag once a second.
+     */
+    private val countdownViews = LinkedHashMap<String, Pair<TextView, Long>>()
+    private var tickerRunning = false
+    private val ticker = object : Runnable {
+        override fun run() {
+            if (!tickerRunning) return
+            val now = System.currentTimeMillis()
+            countdownViews.forEach { (_, tv) -> tv.first.text = remainingText(tv.second, now) }
+            uiHandler.postDelayed(this, 1000L)
+        }
+    }
+
     // hud-modify state
     private var modifyPinId: String? = null
     private var fullscreenView: FrameLayout? = null
@@ -76,6 +93,7 @@ class HudPinBoardController(
     fun stop() {
         subscription?.runCatching { close() }
         subscription = null
+        stopTicker()
     }
 
     /** Re-slot the grid after HUD geometry changes (camera preview on/off). */
@@ -130,9 +148,15 @@ class HudPinBoardController(
         exitModifyMode()
         board.removeAllViews()
         pinViews.clear()
-        if (pins.isEmpty()) return
+        // The views the ticker writes into are about to be discarded.
+        countdownViews.clear()
+        if (pins.isEmpty()) {
+            stopTicker()
+            return
+        }
         if (board.width <= 0) {
             // pre-layout — retry once the overlay has real bounds
+            stopTicker()
             board.post { if (board.width > 0) render(pinsSnapshot) }
             return
         }
@@ -202,6 +226,43 @@ class HudPinBoardController(
             board.addView(container)
             pinViews[pin.id] = container
         }
+        syncTicker()
+    }
+
+    // ------------------------------------------------------------------
+    // Countdown ticking
+    // ------------------------------------------------------------------
+
+    /** Run the 1s tick only while countdown chips are actually on screen. */
+    private fun syncTicker() {
+        if (countdownViews.isEmpty()) {
+            stopTicker()
+            return
+        }
+        if (tickerRunning) return
+        tickerRunning = true
+        // Immediate first pass so a just-pinned chip never shows a stale
+        // value for up to a second.
+        ticker.run()
+    }
+
+    private fun stopTicker() {
+        tickerRunning = false
+        uiHandler.removeCallbacks(ticker)
+    }
+
+    /** `m:ss`, or `h:mm:ss` past the hour. Overdue chips read "now". */
+    private fun remainingText(dueAtMs: Long, now: Long): String {
+        val secs = (dueAtMs - now + 999L) / 1000L
+        if (secs <= 0L) return "now"
+        val h = secs / 3600L
+        val m = (secs % 3600L) / 60L
+        val s = secs % 60L
+        return if (h > 0L) {
+            String.format(Locale.US, "%d:%02d:%02d", h, m, s)
+        } else {
+            String.format(Locale.US, "%d:%02d", m, s)
+        }
     }
 
     /** Container FrameLayout: content + (hidden until modify) ✕ chip. */
@@ -220,6 +281,9 @@ class HudPinBoardController(
                     .coerceIn(1, LiveCardEngine.MAX_CARD_LINES)
                 dp(240) to dp(LIVE_HEADER_DP + lineCount * LIVE_LINE_DP)
             }
+            // One line of label + time — deliberately small, a countdown is
+            // glanceable status, not content.
+            HudPinStore.TYPE_COUNTDOWN -> dp(132) to dp(24)
             else -> dp(92) to dp(46)
         }
         container.layoutParams = FrameLayout.LayoutParams(w, h)
@@ -231,6 +295,7 @@ class HudPinBoardController(
         val content: View = when (pin.type) {
             HudPinStore.TYPE_PICTURE -> buildPictureContent(pin)
             HudPinStore.TYPE_LIVE -> buildLiveContent(pin)
+            HudPinStore.TYPE_COUNTDOWN -> buildCountdownContent(pin)
             else -> buildNoteContent(pin)
         }
         content.layoutParams = FrameLayout.LayoutParams(
@@ -331,6 +396,57 @@ class HudPinBoardController(
 
         col.alpha = if (pin.stale || pin.content.isBlank()) 0.72f else 1f
         return col
+    }
+
+    /**
+     * Countdown chip: same dark translucent slab as a live card, one row —
+     * "drink water · 0:47". The time TextView is registered in
+     * [countdownViews] so the ticker can rewrite it without a re-render.
+     */
+    private fun buildCountdownContent(pin: HudPin): View {
+        val row = LinearLayout(activity)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(7), dp(2), dp(7), dp(2))
+        row.background = GradientDrawable().apply {
+            setColor(0xB3000000.toInt())
+            cornerRadius = 3f * density
+        }
+
+        val label = TextView(activity)
+        label.layoutParams = LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+        )
+        label.text = pin.payload.ifBlank { pin.label }
+        label.setTextColor(0xFF7FDBFF.toInt())
+        label.textSize = 9.2f
+        label.typeface = Typeface.DEFAULT_BOLD
+        label.maxLines = 1
+        label.ellipsize = android.text.TextUtils.TruncateAt.END
+        row.addView(label)
+
+        // Separator is its own view so the ticker's text is JUST the clock.
+        val dot = TextView(activity)
+        dot.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { marginStart = dp(4); leftMargin = dp(4) }
+        dot.text = "·"
+        dot.setTextColor(0x80FFFFFF.toInt())
+        dot.textSize = 9.2f
+        row.addView(dot)
+
+        val time = TextView(activity)
+        time.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { marginStart = dp(5); leftMargin = dp(5) }
+        time.text = remainingText(pin.dueAtMs, System.currentTimeMillis())
+        time.setTextColor(Color.WHITE)
+        time.textSize = 9.6f
+        time.typeface = Typeface.MONOSPACE // fixed width — digits don't jitter
+        row.addView(time)
+
+        countdownViews[pin.id] = time to pin.dueAtMs
+        return row
     }
 
     private fun ageText(updatedAt: Long): String {

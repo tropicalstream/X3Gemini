@@ -39,19 +39,32 @@ object ReminderScheduler {
             // No exact-alarm permission: a 1-minute window is fine for reminders.
             am.setWindow(AlarmManager.RTC_WAKEUP, reminder.atMs, 60_000L, pi)
         }
+        postCountdownPin(context, reminder)
         Log.i(TAG, "scheduled '${reminder.text.take(40)}' at ${Date(reminder.atMs)} exact=$canExact")
     }
 
     fun cancel(context: Context, reminderId: String) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         am.cancel(firePendingIntent(context, reminderId))
+        removeCountdownPin(context, reminderId)
     }
 
     /** Re-register every stored reminder (boot / app start). Past-due ones fire now. */
     fun rescheduleAll(context: Context) {
         ReminderStore.init(context)
         val now = System.currentTimeMillis()
-        ReminderStore.all().forEach { r ->
+        val pending = ReminderStore.all()
+        // Sweep countdown chips whose reminder no longer exists (killed by
+        // a crash between the two stores, or an old build's pins) — the
+        // reminder list is the truth, the chips are derived from it.
+        runCatching {
+            HudPinStore.init(context)
+            val live = pending.map { it.id }.toSet()
+            HudPinStore.all()
+                .filter { it.type == HudPinStore.TYPE_COUNTDOWN && it.id !in live }
+                .forEach { HudPinStore.remove(it.id) }
+        }
+        pending.forEach { r ->
             if (r.atMs <= now) {
                 // Missed while powered off — deliver immediately.
                 deliver(context, r)
@@ -64,6 +77,10 @@ object ReminderScheduler {
     /** Fire path: notification + HUD pin, then remove or roll daily. */
     fun deliver(context: Context, reminder: ReminderStore.Reminder) {
         notify(context, reminder.text)
+        // The countdown chip has served its purpose — drop it before the
+        // ⏰ post-it lands so the board never shows both for one reminder.
+        // (A daily repeat gets a fresh countdown from schedule() below.)
+        removeCountdownPin(context, reminder.id)
         postHudPin(context, reminder.text)
         if (reminder.repeatDaily) {
             var next = reminder.atMs
@@ -111,6 +128,37 @@ object ReminderScheduler {
                 )
             )
         }.onFailure { Log.w(TAG, "HUD pin failed: ${it.message}") }
+    }
+
+    /**
+     * Live countdown chip for a still-pending reminder. The pin id IS the
+     * reminder id — that's the whole bookkeeping: fire and cancel just
+     * remove by the id they already have.
+     *
+     * Failing to pin is never fatal: the alarm and the notification are
+     * the real delivery channels, the chip is a convenience (it can also
+     * legitimately fail when the board is at MAX_PINS).
+     */
+    private fun postCountdownPin(context: Context, reminder: ReminderStore.Reminder) {
+        runCatching {
+            HudPinStore.init(context)
+            HudPinStore.add(
+                HudPinStore.HudPin(
+                    id = reminder.id,
+                    type = HudPinStore.TYPE_COUNTDOWN,
+                    label = reminder.text.take(40),
+                    payload = reminder.text.take(80),
+                    dueAtMs = reminder.atMs
+                )
+            )
+        }.onFailure { Log.w(TAG, "countdown pin failed: ${it.message}") }
+    }
+
+    private fun removeCountdownPin(context: Context, reminderId: String) {
+        runCatching {
+            HudPinStore.init(context)
+            HudPinStore.remove(reminderId)
+        }.onFailure { Log.w(TAG, "countdown pin removal failed: ${it.message}") }
     }
 
     private fun firePendingIntent(context: Context, reminderId: String): PendingIntent {

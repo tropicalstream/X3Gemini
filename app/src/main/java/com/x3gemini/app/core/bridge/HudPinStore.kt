@@ -43,6 +43,16 @@ object HudPinStore {
      */
     const val TYPE_LIVE = "live"
 
+    /**
+     * Countdown chip — a pending [ReminderStore] reminder made visible on
+     * the HUD while it waits. [HudPin.id] IS the owning reminder's id: the
+     * scheduler removes the chip on fire/cancel by that id alone, so there
+     * is no second mapping to keep in sync. [payload] is the reminder text,
+     * [dueAtMs] the moment it fires; the board ticks the remaining time
+     * locally so the store isn't rewritten once a second.
+     */
+    const val TYPE_COUNTDOWN = "countdown"
+
     /** Hard cap — the pin zone is small (~150×90dp usable). */
     const val MAX_PINS = 10
 
@@ -89,7 +99,13 @@ object HudPinStore {
          * Runtime-only (deliberately NOT persisted, so a transient error
          * never survives a restart); cleared on the next success.
          */
-        val statusNote: String? = null
+        val statusNote: String? = null,
+        /**
+         * Wall-clock ms this pin counts down to (TYPE_COUNTDOWN only).
+         * Defaulted so pins persisted before countdowns existed still
+         * parse; 0 = no deadline.
+         */
+        val dueAtMs: Long = 0L
     ) {
         fun toJson(): JSONObject = JSONObject()
             .put("id", id)
@@ -105,6 +121,7 @@ object HudPinStore {
             .put("updatedAt", updatedAt)
             .put("intervalSec", intervalSec)
             .put("stale", stale)
+            .put("dueAtMs", dueAtMs)
 
         companion object {
             fun fromJson(o: JSONObject): HudPin? {
@@ -126,7 +143,8 @@ object HudPinStore {
                     content = o.optString("content"),
                     updatedAt = o.optLong("updatedAt", 0L),
                     intervalSec = o.optInt("intervalSec", 0),
-                    stale = o.optBoolean("stale", false)
+                    stale = o.optBoolean("stale", false),
+                    dueAtMs = o.optLong("dueAtMs", 0L)
                 )
             }
         }
