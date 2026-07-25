@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
@@ -53,6 +55,16 @@ class GeminiVoicePipeline(context: Context) {
 
     @Volatile private var liveSession: GeminiLiveClient.LiveSessionHandle? = null
     @Volatile private var liveSessionReady: Boolean = false
+
+    /** When playback was cut locally by a barge-in, 0 when not barged.
+     *  Gates late model audio so the flushed track doesn't refill. */
+    @Volatile private var localBargeAtMs: Long = 0L
+
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+
+    /** Throttles the barge-in diagnostic so it can't flood logcat. */
+    @Volatile private var lastBargeDiagMs: Long = 0L
     @Volatile private var captureActive: Boolean = false
     @Volatile private var audioRecord: AudioRecord? = null
     @Volatile private var audioThread: Thread? = null
@@ -206,12 +218,16 @@ class GeminiVoicePipeline(context: Context) {
 
         val rec = audioRecord
         audioRecord = null
+        // Effects are bound to the recorder's session — free them first, or
+        // they leak a global audio-effect slot across sessions.
+        releaseAudioEffects()
         runCatching { rec?.stop() }
         runCatching { rec?.release() }
 
         val session = liveSession
         liveSession = null
         liveSessionReady = false
+        localBargeAtMs = 0L
         runCatching { session?.close() }
 
         connectJob?.cancel()
@@ -278,6 +294,32 @@ class GeminiVoicePipeline(context: Context) {
     private fun isSessionEpochCurrent(epoch: Long): Boolean =
         activeSessionEpoch == epoch
 
+    /**
+     * The user started talking over Gemini. Cut the reply immediately instead
+     * of waiting for the server's `interrupted` — that arrives late enough
+     * that the assistant audibly talks over you first.
+     *
+     * Safe to fire more than once, and safe if the server later disagrees:
+     * [LOCAL_BARGE_HOLD_MS] bounds how long we stay muted.
+     */
+    private fun onLocalBargeIn(level: Float, gate: Float) {
+        localBargeAtMs = SystemClock.uptimeMillis()
+        Log.i(
+            TAG,
+            "Local barge-in: mic=%.2f over gate=%.2f — cutting playback now"
+                .format(level, gate)
+        )
+        noteConversationActivity()
+        runCatching { audioPlayer.stopAndFlush() }
+        HudStateBridge.update {
+            it.copy(
+                phase = HudStateBridge.VoicePhase.LISTENING,
+                oscilloscopeLevel = 0f,
+                oscilloscopeChannel = HudStateBridge.OscilloscopeChannel.USER
+            )
+        }
+    }
+
     private fun noteConversationActivity() {
         lastConversationActivityMs = SystemClock.uptimeMillis()
     }
@@ -335,6 +377,13 @@ class GeminiVoicePipeline(context: Context) {
             override fun onModelAudio(mimeType: String, data: ByteArray) {
                 if (!isSessionEpochCurrent(epoch) || !liveSessionReady) return
                 if (data.isEmpty()) return
+                // We already cut this reply locally because the user started
+                // talking. Chunks still in flight would immediately refill the
+                // track we just flushed, so drop them until the server catches
+                // up (or the hold lapses, if we misheard).
+                if (localBargeAtMs != 0L &&
+                    SystemClock.uptimeMillis() - localBargeAtMs < LOCAL_BARGE_HOLD_MS
+                ) return
                 noteConversationActivity()
                 Log.d(TAG, "onModelAudio: ${data.size} bytes ($mimeType)")
                 runCatching {
@@ -358,6 +407,10 @@ class GeminiVoicePipeline(context: Context) {
                 // User barged in — cut the queued reply audio NOW so the
                 // model actually falls silent instead of draining buffers.
                 Log.i(TAG, "onInterrupted: user barge-in, flushing playback")
+                // The server agrees with the local cut (or is telling us
+                // first). Either way the hold has done its job — clear it so
+                // the NEXT turn's audio isn't swallowed.
+                localBargeAtMs = 0L
                 noteConversationActivity()
                 runCatching { audioPlayer.stopAndFlush() }
                 HudStateBridge.update {
@@ -379,6 +432,9 @@ class GeminiVoicePipeline(context: Context) {
                 if (!isSessionEpochCurrent(epoch)) return
                 noteConversationActivity()
                 Log.d(TAG, "onTurnComplete: finishReason=$finishReason")
+                // A finished turn ends any local mute: the next turn is a
+                // fresh reply and must be allowed to play.
+                localBargeAtMs = 0L
                 dropLateOutputUntilMs = SystemClock.uptimeMillis() + LATE_OUTPUT_DROP_MS
                 runCatching { chat.appendUserUtterance(latestInputTranscript) }
                 runCatching { chat.commitLiveAssistantStreamIfNeeded() }
@@ -510,7 +566,10 @@ class GeminiVoicePipeline(context: Context) {
         audioThread = Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
             val chunk = ByteArray(2048)
+            val silence = ByteArray(2048)   // stands in for speaker echo
             var loggedFirstFrame = false
+            var bargeFrames = 0
+            var userSpeakingUntilMs = 0L
             while (captureActive && isSessionEpochCurrent(epoch)) {
                 val read = try {
                     recorder.read(chunk, 0, chunk.size)
@@ -530,6 +589,63 @@ class GeminiVoicePipeline(context: Context) {
                     if (norm >= USER_SPEECH_LEVEL) {
                         lastConversationActivityMs = SystemClock.uptimeMillis()
                     }
+                    // Synchronous barge-in: cut Gemini off HERE, on the
+                    // device, rather than waiting for the server's verdict to
+                    // make a round trip.
+                    //
+                    // Echo handling, with a HANGOVER.
+                    //
+                    // On raw MIC there is no platform AEC, so at higher volumes
+                    // Gemini's own voice returns loudly enough that the server
+                    // transcribes the model as the user (observed verbatim: an
+                    // answer about tides came back as an inputTranscription).
+                    // So sub-threshold audio is replaced with silence while the
+                    // model speaks.
+                    //
+                    // The hangover is the part that matters. A previous version
+                    // decided this per frame, and speech dips between syllables
+                    // — so real sentences were shredded into fragments, the
+                    // server stopped recognising them at all, and the session
+                    // died on the silence watchdog. Once ANY frame clears the
+                    // gate, the path stays open for [BARGE_HANGOVER_MS] so a
+                    // whole utterance travels intact.
+                    var suppressToServer = false
+                    if (audioPlayer.isActivelySpeaking()) {
+                        val out = audioPlayer.currentOutputLevel()
+                        val gate = BARGE_BASE_LEVEL + BARGE_ECHO_REJECT * out
+                        // Diagnostic: without real numbers, tuning this
+                        // threshold is guesswork — the first attempt was set
+                        // far above actual speech and silently never fired.
+                        val nowMs = SystemClock.uptimeMillis()
+                        if (nowMs - lastBargeDiagMs >= BARGE_DIAG_INTERVAL_MS) {
+                            lastBargeDiagMs = nowMs
+                            Log.d(
+                                TAG,
+                                "barge-watch mic=%.3f out=%.3f gate=%.3f %s"
+                                    .format(norm, out, gate, if (norm >= gate) "OVER" else "under")
+                            )
+                        }
+                        if (norm >= gate) {
+                            // Over the gate = a real voice, not our own
+                            // speaker. Forward it from the FIRST frame so the
+                            // opening syllable isn't lost; the frame count
+                            // only debounces the playback cut.
+                            userSpeakingUntilMs = nowMs + BARGE_HANGOVER_MS
+                            if (++bargeFrames >= BARGE_FRAMES) {
+                                bargeFrames = 0
+                                onLocalBargeIn(norm, gate)
+                            }
+                        } else {
+                            bargeFrames = 0
+                        }
+                        // Only silence the feed once the hangover has lapsed,
+                        // i.e. nothing voice-like for a while — by then it
+                        // really is just the speaker.
+                        suppressToServer = nowMs >= userSpeakingUntilMs
+                    } else {
+                        bargeFrames = 0
+                        userSpeakingUntilMs = 0L
+                    }
                     // Only drive the USER (red) glow while LISTENING — the
                     // mic keeps streaming during Gemini's reply (barge-in),
                     // and the red level would clobber the green MODEL level.
@@ -546,7 +662,11 @@ class GeminiVoicePipeline(context: Context) {
                     }
                     if (isSessionEpochCurrent(epoch)) {
                         runCatching {
-                            liveSession?.sendAudioChunkPcm16(chunk, read, SAMPLE_RATE_HZ)
+                            // Silence rather than a gap: the stream must stay
+                            // continuous or the server's VAD reads the hole as
+                            // end-of-turn.
+                            val frame = if (suppressToServer) silence else chunk
+                            liveSession?.sendAudioChunkPcm16(frame, read, SAMPLE_RATE_HZ)
                         }
                     }
                 } else if (read < 0) {
@@ -561,9 +681,22 @@ class GeminiVoicePipeline(context: Context) {
     }
 
     private fun createAudioRecord(bufferSize: Int): AudioRecord? {
+        // MIC FIRST, deliberately.
+        //
+        // VOICE_COMMUNICATION runs the platform's voice pipeline, and on the
+        // X3 that pipeline is HALF-DUPLEX: while the speaker plays, capture is
+        // gated shut. Measured directly — the mic reads exactly 0.000 for the
+        // entire length of Gemini's reply, not merely quiet, but muted. Under
+        // that, barge-in is impossible by construction: there is no signal to
+        // detect, which is also why the server only ever saw the interruption
+        // AFTER playback finished.
+        //
+        // Raw MIC keeps the capture path open through playback. The cost is
+        // that Gemini's own voice comes back in, which is what the
+        // output-scaled term in the barge gate is for.
         val sources = intArrayOf(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-            MediaRecorder.AudioSource.MIC
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION
         )
         for (source in sources) {
             val rec = runCatching {
@@ -581,11 +714,47 @@ class GeminiVoicePipeline(context: Context) {
                     "AudioRecord opened with source=" +
                         if (source == MediaRecorder.AudioSource.VOICE_COMMUNICATION) "VOICE_COMM" else "MIC"
                 )
+                // Only on the voice path. Attaching the canceller to raw MIC
+                // reinstates exactly the suppression that made the mic read
+                // 0.000 through every reply — we handle echo ourselves above.
+                if (source == MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
+                    attachEchoCancellation(rec.audioSessionId)
+                }
                 return rec
             }
             runCatching { rec.release() }
         }
         return null
+    }
+
+    /**
+     * Turn on the platform echo canceller / noise suppressor for this capture
+     * session. VOICE_COMMUNICATION usually implies AEC, but it isn't
+     * guaranteed per device, and barge-in makes it load-bearing: without it
+     * Gemini's own voice comes back through the glasses mic loudly enough to
+     * trip [onLocalBargeIn], and the reply cuts itself off mid-sentence.
+     */
+    private fun attachEchoCancellation(sessionId: Int) {
+        if (AcousticEchoCanceler.isAvailable()) {
+            runCatching {
+                echoCanceler = AcousticEchoCanceler.create(sessionId)?.apply { enabled = true }
+            }
+            Log.d(TAG, "AcousticEchoCanceler enabled=${echoCanceler?.enabled}")
+        } else {
+            Log.w(TAG, "No AcousticEchoCanceler on this device — barge-in gate carries it")
+        }
+        if (NoiseSuppressor.isAvailable()) {
+            runCatching {
+                noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
+            }
+        }
+    }
+
+    private fun releaseAudioEffects() {
+        runCatching { echoCanceler?.release() }
+        runCatching { noiseSuppressor?.release() }
+        echoCanceler = null
+        noiseSuppressor = null
     }
 
     private fun calculatePcm16Peak(data: ByteArray, size: Int): Int {
@@ -624,5 +793,51 @@ class GeminiVoicePipeline(context: Context) {
          *  watchdog. High enough that room ambience doesn't hold the
          *  session open; near-mouth speech on the X3's array clears it. */
         private const val USER_SPEECH_LEVEL = 0.12f
+
+        /**
+         * SYNCHRONOUS barge-in.
+         *
+         * Server-side VAD already interrupts (realtimeInputConfig, HIGH/HIGH),
+         * but that verdict has to travel: mic audio up, VAD, `interrupted`
+         * back down. Meanwhile the reply keeps playing out of the local
+         * AudioTrack buffer, so Gemini talks over you for the better part of a
+         * second and the interruption reads as broken. So we also cut playback
+         * ON DEVICE the moment we hear the user, and let the server's verdict
+         * confirm what we already did.
+         *
+         * The threshold rides the model's own output level because Gemini's
+         * voice leaks back into the mic; without that term the reply would
+         * interrupt itself. AEC (below) does most of the work, this is belt
+         * and braces.
+         *
+         * Sized against [USER_SPEECH_LEVEL], which is the already-proven
+         * "this is the user talking" level on the X3's mic array. The first
+         * cut at 0.20 + 0.35·output never once triggered in a live test —
+         * comfortably above real speech, so it gated everything out. Sitting
+         * just above the known-good speech level, with a smaller echo term
+         * now that AEC is confirmed active (enabled=true on this device),
+         * is the calibrated choice rather than another guess.
+         */
+        private const val BARGE_BASE_LEVEL = 0.13f
+        private const val BARGE_ECHO_REJECT = 0.20f
+
+        /** Throttle for the barge-in diagnostic line. */
+        private const val BARGE_DIAG_INTERVAL_MS = 500L
+
+        /** Consecutive mic frames over threshold before cutting. One frame is
+         *  2048 bytes = 1024 samples @16 kHz = 64 ms, so 3 ≈ 190 ms — long
+         *  enough to ignore a cough or a door, short enough to feel instant. */
+        private const val BARGE_FRAMES = 3
+
+        /** How long the mic keeps reaching the server after the last
+         *  voice-like frame. Longer than any inter-syllable dip, so a sentence
+         *  is never cut into pieces mid-flow; short enough that steady echo
+         *  gets muted within a second of the user actually stopping. */
+        private const val BARGE_HANGOVER_MS = 900L
+
+        /** After a local cut, ignore model audio this long. If the server
+         *  agrees it stops sending anyway; if we were WRONG, playback resumes
+         *  after the hold instead of the reply being lost entirely. */
+        private const val LOCAL_BARGE_HOLD_MS = 1_200L
     }
 }
