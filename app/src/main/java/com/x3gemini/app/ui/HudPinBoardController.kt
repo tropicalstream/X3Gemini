@@ -268,19 +268,19 @@ class HudPinBoardController(
     /** Container FrameLayout: content + (hidden until modify) ✕ chip. */
     private fun buildPinView(pin: HudPin): FrameLayout {
         val container = FrameLayout(activity)
+        val content: View = when (pin.type) {
+            HudPinStore.TYPE_PICTURE -> buildPictureContent(pin)
+            HudPinStore.TYPE_LIVE -> buildLiveContent(pin)
+            HudPinStore.TYPE_COUNTDOWN -> buildCountdownContent(pin)
+            else -> buildNoteContent(pin)
+        }
         val (w, h) = when (pin.type) {
-            HudPinStore.TYPE_NOTE -> dp(100) to dp(74)
+            // Notes and live cards hug their rendered content. The previous
+            // fixed boxes stretched both the visible background and the
+            // clickable hit target far beyond short text.
+            HudPinStore.TYPE_NOTE -> measureContent(content, dp(NOTE_MAX_WIDTH_DP))
             HudPinStore.TYPE_PICTURE -> dp(64) to dp(48)
-            // Live cards grow with their content up to the line cap, so a
-            // "top 10 headlines" card is fully readable instead of clipped
-            // at 2 lines. Height = header + padding + one row per line.
-            HudPinStore.TYPE_LIVE -> {
-                val lineCount = pin.content.ifBlank { pin.label }
-                    .count { it == '\n' }
-                    .plus(1)
-                    .coerceIn(1, LiveCardEngine.MAX_CARD_LINES)
-                dp(240) to dp(LIVE_HEADER_DP + lineCount * LIVE_LINE_DP)
-            }
+            HudPinStore.TYPE_LIVE -> measureContent(content, dp(LIVE_MAX_WIDTH_DP))
             // One line of label + time — deliberately small, a countdown is
             // glanceable status, not content.
             HudPinStore.TYPE_COUNTDOWN -> dp(132) to dp(24)
@@ -291,13 +291,11 @@ class HudPinBoardController(
         container.isClickable = true
         container.isFocusable = true
         container.tag = pin.id
-
-        val content: View = when (pin.type) {
-            HudPinStore.TYPE_PICTURE -> buildPictureContent(pin)
-            HudPinStore.TYPE_LIVE -> buildLiveContent(pin)
-            HudPinStore.TYPE_COUNTDOWN -> buildCountdownContent(pin)
-            else -> buildNoteContent(pin)
-        }
+        // A very short content-sized pin can be narrower than the modify
+        // chip; let that temporary control overhang without enlarging the
+        // pin's normal visual or hit bounds.
+        container.clipChildren = false
+        container.clipToPadding = false
         content.layoutParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
         )
@@ -311,6 +309,21 @@ class HudPinBoardController(
             if (modifyPinId != null) exitModifyMode() else openPin(pin)
         }
         return container
+    }
+
+    /**
+     * Measure a wrap-content surface before it is attached to [board].
+     * render() needs concrete positive dimensions immediately for flow,
+     * collision avoidance, clamping, and move-centering, so leaving the
+     * container itself as WRAP_CONTENT would feed -2 into that geometry.
+     */
+    private fun measureContent(content: View, maxWidthPx: Int): Pair<Int, Int> {
+        content.measure(
+            View.MeasureSpec.makeMeasureSpec(maxWidthPx, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        return content.measuredWidth.coerceAtLeast(1) to
+            content.measuredHeight.coerceAtLeast(1)
     }
 
     private fun buildNoteContent(pin: HudPin): View {
@@ -698,10 +711,9 @@ class HudPinBoardController(
     companion object {
         private const val CHIP_TAG = "hud_pin_chip"
 
-        // Live-card box sizing (logical px). Header row + vertical padding,
-        // then one row per content line at 10.4sp with 1.05 spacing.
-        private const val LIVE_HEADER_DP = 27
-        private const val LIVE_LINE_DP = 15
+        // Content-sized notes/live cards retain their former widths as caps.
+        private const val NOTE_MAX_WIDTH_DP = 100
+        private const val LIVE_MAX_WIDTH_DP = 240
 
         /**
          * The under-HUD content zone in the overlay's LOGICAL 640×480
