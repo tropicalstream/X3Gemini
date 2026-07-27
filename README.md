@@ -131,7 +131,7 @@ the double-tap modify mode.
 | Say | What happens |
 |---|---|
 | *"Remember that my car is parked on level 3."* | Stored durably; available in every future conversation. |
-| *"Remember my name is Mars and I live in Oakland."* | Same — the assistant also auto-remembers clearly durable facts you share. |
+| *"Remember my name is Grandpa Simpson and I live in Springfield."* | Same — the assistant also auto-remembers clearly durable facts you share. |
 | *"What do you remember?"* / *"Forget the parking one."* | List / delete memories. |
 
 Memory is injected into every session's system prompt (max 60 entries; oldest
