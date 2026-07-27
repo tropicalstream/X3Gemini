@@ -133,9 +133,23 @@ class MainActivity : AppCompatActivity() {
     // the chat card a short while after (rather than persisting it).
     private var lastVoicePhase: HudStateBridge.VoicePhase = HudStateBridge.VoicePhase.IDLE
     private val hideChatCardRunnable = Runnable {
-        // Suppress any re-show of these cards, then clear the box.
-        assistantCardDismissedThroughMs = System.currentTimeMillis()
-        findViewById<View?>(R.id.unipanelMiniCardScroll)?.visibility = View.GONE
+        dismissAssistantCard()
+    }
+
+    /** Hide only the currently displayed reply. A later reply has a newer
+     * timestamp and can still appear normally. */
+    private fun dismissAssistantCard() {
+        val scroll = findViewById<View?>(R.id.unipanelMiniCardScroll) ?: return
+        if (scroll.visibility != View.VISIBLE) return
+        val latestAssistantTimestamp = ChatCardBridge.current()
+            .lastOrNull { !it.fromUser && it.text.isNotBlank() }
+            ?.timestampMs
+            ?: System.currentTimeMillis()
+        assistantCardDismissedThroughMs = maxOf(
+            assistantCardDismissedThroughMs,
+            latestAssistantTimestamp
+        )
+        scroll.visibility = View.GONE
         findViewById<TextView?>(R.id.unipanelMiniCard1)?.text = ""
     }
 
@@ -748,6 +762,10 @@ class MainActivity : AppCompatActivity() {
                 setCursorVisible(true)
             }
             MotionEvent.ACTION_MOVE -> {
+                // Any right-trackpad movement immediately clears the current
+                // chat card, even the first delta that is intentionally not
+                // applied to the cursor.
+                dismissAssistantCard()
                 val dx = ev.x - lastTrackpadX
                 val dy = ev.y - lastTrackpadY
                 lastTrackpadX = ev.x

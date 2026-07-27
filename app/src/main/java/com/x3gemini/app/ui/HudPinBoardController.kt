@@ -612,7 +612,6 @@ class HudPinBoardController(
             HudPinStore.remove(id)
             showToast("Pin removed")
         }.also { it.tag = CHIP_TAG })
-        showToast("Tap a spot to move it · ✕ deletes")
     }
 
     private fun buildChip(
